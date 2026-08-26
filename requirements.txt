@@ -1,0 +1,15 @@
+# Dependencias PESADAS: solo las necesita quien ejecuta el pipeline completo.
+# Arrastra PyTorch (~3 GB). Instalacion:
+#     pip install -r requirements.txt
+#
+# Si solo vas a correr los tests, NO instales esto: usa requirements-dev.txt.
+
+# --- Ya verificadas en la Fase 1 ------------------------------------------
+pydantic==2.13.4        # validacion del contrato de datos
+python-dotenv==1.2.2    # lectura del archivo .env
+
+# --- Se instalan y se fijan en la Fase 2/3 --------------------------------
+# Todavia no las hemos instalado: al usarlas por primera vez, fijar aqui la
+# version exacta que nos funcione (reemplazar >= por ==).
+opencv-python>=4.10     # lectura de video y dibujado (Fase 2)
+ultralytics>=8.3        # deteccion YOLO (Persona 2, Fase 3)
