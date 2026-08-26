@@ -20,7 +20,7 @@ def test_carga_con_valores_por_defecto():
     assert cfg.frame_stride == 1
     assert cfg.max_frames == 0
     assert cfg.device == "cpu"
-    assert cfg.render_mode == "boxes"
+    assert cfg.render_mode == "privacy"
     assert cfg.log_level == "INFO"
 
 

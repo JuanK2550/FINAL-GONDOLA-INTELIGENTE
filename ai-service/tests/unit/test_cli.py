@@ -10,6 +10,10 @@ import pytest
 from gondola.cli import EXIT_ERROR, EXIT_FALTA_REQUISITO, EXIT_OK, main
 from gondola.pipeline import STAGE_NAMES, STAGES
 
+# 'detect' ya esta implementada (Fase 3), asi que no imprime el texto de
+# placeholder. Los tests de placeholder van sobre las que siguen pendientes.
+ETAPAS_PENDIENTES = [e for e in STAGES if e.name != "detect"]
+
 
 @pytest.fixture(autouse=True)
 def entorno_limpio(tmp_path, monkeypatch):
@@ -64,7 +68,7 @@ def test_un_placeholder_sin_su_entrada_avisa_que_falta_el_requisito(nombre):
     assert main([nombre]) == EXIT_FALTA_REQUISITO
 
 
-@pytest.mark.parametrize("etapa", STAGES, ids=lambda e: e.name)
+@pytest.mark.parametrize("etapa", ETAPAS_PENDIENTES, ids=lambda e: e.name)
 def test_un_placeholder_con_su_entrada_lista_devuelve_error(etapa, entorno_limpio):
     """Ya no falta nada salvo el codigo: sale con 1 para que `run` se detenga."""
     _crear_entrada_de(etapa, entorno_limpio)
@@ -81,7 +85,7 @@ def _crear_entrada_de(etapa, tmp_path):
     entrada.write_text("", encoding="utf-8")
 
 
-@pytest.mark.parametrize("etapa", STAGES, ids=lambda e: e.name)
+@pytest.mark.parametrize("etapa", ETAPAS_PENDIENTES, ids=lambda e: e.name)
 def test_el_placeholder_dice_de_quien_es_y_que_archivos_usa(etapa, capsys):
     """Es lo primero que vera el companero al que le toque el modulo."""
     main([etapa.name])
@@ -109,19 +113,24 @@ def test_un_subcomando_inventado_no_arranca():
 # run
 # --------------------------------------------------------------------------
 
-def test_run_se_detiene_en_la_primera_etapa(capsys):
-    """Sin video, se detiene en detect y lo dice; no sigue con las demas."""
+def test_run_se_detiene_en_detect_si_no_hay_video(capsys):
+    """Sin video, detect no puede arrancar: codigo 2 y se dice donde paro."""
     assert main(["run"]) == EXIT_FALTA_REQUISITO
     salida = capsys.readouterr().out
     assert "se detiene en 'detect'" in salida
-    assert "[metrics]" not in salida
+    assert "[metrics]" not in salida  # no sigue con las siguientes
 
 
-def test_run_se_detiene_en_detect_aunque_haya_video(entorno_limpio, capsys):
-    """Con el video puesto, el bloqueo pasa a ser la implementacion: sale con 1."""
+def test_run_dice_donde_paro_aunque_la_etapa_lance_una_excepcion(entorno_limpio, capsys):
+    """Un video corrupto revienta dentro de detect; run debe seguir diciendo donde paro.
+
+    Si el error se dejara subir hasta main(), el codigo de salida seria correcto
+    pero se perderia el mensaje de "la cadena se detiene en X".
+    """
+    pytest.importorskip("cv2")
     video = entorno_limpio / "videos" / "scapder.mp4"
     video.parent.mkdir(parents=True, exist_ok=True)
-    video.write_text("falso", encoding="utf-8")
+    video.write_text("esto no es un video", encoding="utf-8")
 
     assert main(["run"]) == EXIT_ERROR
     salida = capsys.readouterr().out

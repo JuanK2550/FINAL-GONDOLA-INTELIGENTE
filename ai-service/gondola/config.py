@@ -23,7 +23,7 @@ from gondola.errors import ConfigError
 RAIZ = Path(__file__).resolve().parents[2]
 
 DEVICES_VALIDOS = {"cpu", "cuda", "mps"}
-RENDER_MODES_VALIDOS = {"none", "boxes", "full"}
+RENDER_MODES_VALIDOS = {"none", "debug", "privacy"}
 LOG_LEVELS_VALIDOS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
@@ -149,6 +149,6 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         frame_stride=_leer_int(env, "FRAME_STRIDE", 1, 1, 100),
         max_frames=_leer_int(env, "MAX_FRAMES", 0, 0, 1_000_000),
         device=_leer_opcion(env, "DEVICE", "cpu", DEVICES_VALIDOS),
-        render_mode=_leer_opcion(env, "RENDER_MODE", "boxes", RENDER_MODES_VALIDOS),
+        render_mode=_leer_opcion(env, "RENDER_MODE", "privacy", RENDER_MODES_VALIDOS),
         log_level=_leer_opcion(env, "LOG_LEVEL", "INFO", LOG_LEVELS_VALIDOS),
     )

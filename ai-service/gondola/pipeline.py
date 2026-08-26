@@ -169,3 +169,22 @@ def require_input(name: str, cfg: Config) -> Path:
         f"Que hacer: corre primero la etapa que lo produce:\n"
         f"    python -m gondola {anterior.name}"
     )
+
+
+def summary_path(name: str, cfg: Config) -> Path:
+    """Ruta del resumen JSON de una etapa (metricas de la corrida, no eventos).
+
+    Vive aqui, junto al resto de rutas, para que nadie construya
+    "video_001.detect.summary.json" a mano en su modulo.
+    """
+    get_stage(name)  # valida que la etapa exista
+    return cfg.output_dir / f"{cfg.video_id}.{name}.summary.json"
+
+
+def render_path(name: str, cfg: Config, modo: str) -> Path:
+    """Ruta del video renderizado de una etapa.
+
+    El modo va en el nombre a proposito: asi el video de privacidad y el de
+    depuracion nunca se pisan, y al ver el archivo se sabe cual es cual.
+    """
+    return cfg.output_dir / f"{cfg.video_id}.{name}.{modo}.mp4"

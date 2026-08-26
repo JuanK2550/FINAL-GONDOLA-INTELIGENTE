@@ -4,8 +4,7 @@ Sirven para distinguir "el proyecto detecto un problema y sabe explicarlo" de
 "algo se rompio en una libreria". Regla de oro: el mensaje debe decir QUE HACER,
 no solo que fallo.
 
-Solo existen las que se usan hoy. Cuando la Fase 3 cargue el modelo YOLO, se
-anadira `ModelError`.
+Solo existen las que se usan hoy.
 """
 
 
@@ -31,3 +30,11 @@ class MissingInputError(PipelineError):
     Se trata aparte del resto porque NO es un fallo del programa: es que todavia
     no toca. La CLI la traduce al codigo de salida 2, distinto del 1 de error.
     """
+
+
+class VideoError(GondolaError):
+    """El video no se pudo abrir o leer: archivo corrupto o codec no soportado."""
+
+
+class ModelError(GondolaError):
+    """El modelo YOLO no se pudo cargar o no sirve para lo que necesitamos."""
