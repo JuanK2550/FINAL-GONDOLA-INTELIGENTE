@@ -3,4 +3,4 @@
 Utilidades de un solo uso: descargar el modelo YOLO, preparar el video,
 generar reportes. No es codigo del pipeline; es andamiaje.
 
-Vacía en la Fase 1.
+Por ahora solo `make_test_clips.py`, que genera los clips sinteticos de prueba.

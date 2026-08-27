@@ -5,10 +5,30 @@ y permite leer la salida con capsys. `main` devuelve el codigo de salida en vez
 de llamar a sys.exit justamente para esto.
 """
 
+import logging
+
 import pytest
 
-from gondola.cli import EXIT_ERROR, EXIT_FALTA_REQUISITO, EXIT_OK, main
-from gondola.pipeline import STAGE_NAMES, STAGES
+from gondola.cli import (
+    EXIT_ERROR,
+    EXIT_FALTA_REQUISITO,
+    EXIT_OK,
+    _aplicar_opciones,
+    _parser,
+    main,
+)
+from gondola.config import load_config
+from gondola.errors import (
+    ConfigError,
+    ContractError,
+    GondolaError,
+    MissingInputError,
+    ModelError,
+    PipelineError,
+    VideoError,
+)
+from gondola.logging_setup import setup_logging
+from gondola.pipeline import STAGE_NAMES, STAGES, stage_paths
 
 # 'detect' ya esta implementada (Fase 3), asi que no imprime el texto de
 # placeholder. Los tests de placeholder van sobre las que siguen pendientes.
@@ -202,3 +222,103 @@ def test_purge_sin_nada_que_borrar(capsys):
 def test_los_tres_codigos_de_salida_son_distintos():
     """0 exito, 1 error, 2 falta un requisito. Un script que llame a la CLI los distingue."""
     assert len({EXIT_OK, EXIT_ERROR, EXIT_FALTA_REQUISITO}) == 3
+
+
+# --------------------------------------------------------------------------
+# Opciones de linea de comandos: sobrescriben el .env solo para esa corrida
+# --------------------------------------------------------------------------
+
+def config_con(argv):
+    """Parsea los argumentos como lo hace la CLI y devuelve la config resultante."""
+    args = _parser().parse_args(argv)
+    return _aplicar_opciones(load_config(), args)
+
+
+def test_sin_opciones_la_configuracion_no_se_toca():
+    assert config_con(["detect"]) == load_config()
+
+
+def test_las_opciones_ganan_al_env_para_esa_corrida():
+    cfg = config_con(["detect", "--conf", "0.9", "--stride", "5",
+                      "--max-frames", "50", "--imgsz", "320",
+                      "--device", "cpu", "--render", "none"])
+    assert cfg.confidence_threshold == 0.9
+    assert cfg.frame_stride == 5
+    assert cfg.max_frames == 50
+    assert cfg.imgsz == 320
+    assert cfg.render_mode == "none"
+    # Las opciones no modifican la configuracion cargada del .env: arman otra.
+    assert cfg != load_config()
+
+
+def test_max_frames_cero_por_opcion_significa_video_completo():
+    """0 es un valor legitimo, no 'no me pasaron nada': tiene que llegar igual."""
+    assert config_con(["detect", "--max-frames", "0"]).max_frames == 0
+
+
+def test_pasar_otro_video_cambia_tambien_el_video_id(entorno_limpio):
+    """Si no cambiara, dos videos distintos escribirian en el mismo archivo.
+
+    El segundo borraria la salida del primero sin avisar. El video_id sale del
+    nombre del archivo justamente para que eso no pueda pasar.
+    """
+    otro = entorno_limpio / "videos" / "clip_formas.mp4"
+    otro.parent.mkdir(parents=True, exist_ok=True)
+    otro.write_text("falso", encoding="utf-8")
+
+    cfg = config_con(["detect", "--video", str(otro)])
+    assert cfg.video_id == "clip_formas"
+    assert cfg.video_path == otro
+
+    original = stage_paths("detect", load_config()).output_path
+    nueva = stage_paths("detect", cfg).output_path
+    assert original.name != nueva.name
+
+
+# --------------------------------------------------------------------------
+# La jerarquia de errores es la que sostiene los codigos de salida
+# --------------------------------------------------------------------------
+
+def test_todos_los_errores_del_proyecto_cuelgan_de_GondolaError():
+    """`except GondolaError` en la CLI tiene que atrapar todo lo nuestro."""
+    for error in (ConfigError, ContractError, PipelineError,
+                  MissingInputError, VideoError, ModelError):
+        assert issubclass(error, GondolaError)
+
+
+def test_falta_de_requisito_es_un_caso_aparte_dentro_de_la_jerarquia():
+    """Es un PipelineError, pero la CLI lo atrapa ANTES para darle el codigo 2.
+
+    Si alguien invierte el orden de los `except` en main(), todo pasaria a ser
+    codigo 1 y se perderia la distincion entre 'fallo' y 'todavia no toca'.
+    """
+    assert issubclass(MissingInputError, PipelineError)
+    assert main(["track"]) == EXIT_FALTA_REQUISITO
+
+
+def test_un_error_del_proyecto_sale_con_codigo_1_y_sin_traceback(monkeypatch, capsys):
+    def revienta(*args, **kwargs):
+        raise VideoError("el video esta corrupto. Que hacer: vuelve a copiarlo.")
+
+    monkeypatch.setattr("gondola.cli.comando_etapa", revienta)
+    assert main(["track"]) == EXIT_ERROR
+    assert "Que hacer" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Logging: se configura una sola vez, al arrancar
+# --------------------------------------------------------------------------
+
+def test_configurar_el_logging_dos_veces_no_duplica_los_mensajes():
+    """setup_logging() se llama al arrancar. Si dejara handlers viejos pegados,
+    cada mensaje del pipeline saldria dos veces por pantalla."""
+    raiz = logging.getLogger()
+    handlers, nivel = raiz.handlers[:], raiz.level
+    try:
+        setup_logging("INFO")
+        setup_logging("DEBUG")
+        assert len(raiz.handlers) == 1
+        assert raiz.level == logging.DEBUG
+    finally:
+        raiz.handlers[:] = handlers
+        raiz.setLevel(nivel)

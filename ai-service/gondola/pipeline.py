@@ -35,6 +35,7 @@ class Stage:
     description: str
     input_suffix: str | None  # None significa: esta etapa lee el video, no un archivo
     output_suffix: str
+    fills: tuple[str, ...]  # que campos del contrato rellena, en notacion punto
 
 
 # La tabla. Se lee de arriba a abajo: la salida de cada etapa es la entrada de
@@ -46,6 +47,7 @@ STAGES: tuple[Stage, ...] = (
         description="Detecta personas en cada frame con YOLO",
         input_suffix=None,
         output_suffix=".detect.jsonl",
+        fills=("detection",),
     ),
     Stage(
         name="track",
@@ -53,6 +55,7 @@ STAGES: tuple[Stage, ...] = (
         description="Enlaza las detecciones entre frames y asigna track_id",
         input_suffix=".detect.jsonl",
         output_suffix=".track.jsonl",
+        fills=("track_id",),
     ),
     Stage(
         name="zones",
@@ -60,6 +63,7 @@ STAGES: tuple[Stage, ...] = (
         description="Ubica a cada persona en una zona y acumula dwell_time",
         input_suffix=".track.jsonl",
         output_suffix=".zones.jsonl",
+        fills=("zone", "metrics.dwell_time"),
     ),
     Stage(
         name="interact",
@@ -67,6 +71,7 @@ STAGES: tuple[Stage, ...] = (
         description="Detecta APPROACH, PICK_UP y PUT_BACK frente al estante",
         input_suffix=".zones.jsonl",
         output_suffix=".interact.jsonl",
+        fills=("interaction",),
     ),
     Stage(
         name="metrics",
@@ -74,10 +79,33 @@ STAGES: tuple[Stage, ...] = (
         description="Agrega las metricas finales del video",
         input_suffix=".interact.jsonl",
         output_suffix=".metrics.json",
+        fills=(),  # produce un resumen agregado, no enriquece eventos
     ),
 )
 
 STAGE_NAMES: tuple[str, ...] = tuple(etapa.name for etapa in STAGES)
+
+
+def stages_after(name: str) -> tuple[Stage, ...]:
+    """Las etapas que van DESPUES de esta en la cadena.
+
+    El verificador la usa para saber que campos deben seguir en null: si un
+    archivo .detect.jsonl trae un track_id, alguien se salio de su carril.
+    """
+    get_stage(name)  # valida el nombre
+    indice = STAGE_NAMES.index(name)
+    return STAGES[indice + 1:]
+
+
+def stage_for_file(ruta: Path) -> Stage | None:
+    """Deduce a que etapa pertenece un archivo por su nombre. None si no encaja.
+
+    Asi `verify archivo.jsonl` sabe que reglas aplicar sin que se lo digan.
+    """
+    for etapa in STAGES:
+        if ruta.name.endswith(etapa.output_suffix):
+            return etapa
+    return None
 
 
 @dataclass(frozen=True)

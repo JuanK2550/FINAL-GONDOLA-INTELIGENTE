@@ -309,6 +309,11 @@ def run(cfg: Config, abrir_video: bool = False) -> int:
               + (f"  ->  {video_salida.name}" if cfg.render_mode != "none" else ""))
         print()
 
+        # El verificador necesita saber el tamano del frame y los fps para
+        # comprobar que las cajas caben y que los timestamps cuadran.
+        dimensiones = (video.info.width, video.info.height)
+        fps_video = video.info.fps
+
         inicio = time.perf_counter()
         with Renderer(video_salida, cfg.render_mode, video.info.width,
                       video.info.height, video.info.fps) as renderer:
@@ -320,7 +325,8 @@ def run(cfg: Config, abrir_video: bool = False) -> int:
 
     fps_procesamiento = resumen.frames_procesados / transcurrido if transcurrido > 0 else 0.0
     ruta_resumen = pipeline.summary_path("detect", cfg)
-    _escribir_resumen(ruta_resumen, cfg, resumen, fps_procesamiento, transcurrido, nombre_modelo)
+    _escribir_resumen(ruta_resumen, cfg, resumen, fps_procesamiento, transcurrido,
+                      nombre_modelo, dimensiones, fps_video)
 
     _imprimir_resultado(resumen, escritos, transcurrido, fps_procesamiento, cfg,
                         rutas.output_path, ruta_resumen, video_salida)
@@ -333,7 +339,8 @@ def run(cfg: Config, abrir_video: bool = False) -> int:
 
 def _escribir_resumen(destino: Path, cfg: Config, resumen: Resumen,
                       fps_procesamiento: float, transcurrido: float,
-                      nombre_modelo: str) -> None:
+                      nombre_modelo: str, dimensiones: tuple[int, int],
+                      fps_video: float) -> None:
     """Guarda las metricas de la corrida. Sin esto no se puede comparar nada."""
     promedio = (
         resumen.detecciones_totales / resumen.frames_procesados
@@ -344,6 +351,13 @@ def _escribir_resumen(destino: Path, cfg: Config, resumen: Resumen,
         "stage": "detect",
         "video_id": cfg.video_id,
         "video_path": str(cfg.video_path),
+        # `video` lo lee el verificador: sin el tamano del frame no puede
+        # comprobar que las cajas esten dentro, ni los timestamps sin los fps.
+        "video": {
+            "width": dimensiones[0],
+            "height": dimensiones[1],
+            "fps": round(fps_video, 4),
+        },
         "model": nombre_modelo,
         "params": {
             "confidence_threshold": cfg.confidence_threshold,

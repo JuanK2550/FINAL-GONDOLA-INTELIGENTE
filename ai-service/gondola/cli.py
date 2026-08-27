@@ -267,6 +267,78 @@ def comando_purge(cfg: Config, sin_preguntar: bool) -> int:
 
 
 # --------------------------------------------------------------------------
+# verify y eval
+# --------------------------------------------------------------------------
+
+def comando_verify(cfg: Config, archivo: str | None) -> int:
+    """Revisa una salida del pipeline contra el contrato y las reglas de privacidad."""
+    from gondola.verify.verifier import imprimir_informe, verificar
+
+    if archivo:
+        ruta = _resolver_ruta(archivo)
+    else:
+        # Sin argumento, verifica la salida de detect: es la que existe hoy.
+        ruta = pipeline.stage_paths("detect", cfg).output_path
+
+    if not ruta.exists():
+        raise MissingInputError(
+            f"No existe el archivo a verificar:\n    {ruta}\n\n"
+            f"Que hacer: genera una salida primero, por ejemplo\n"
+            f"    python -m gondola detect"
+        )
+
+    informe = verificar(ruta, cfg)
+    imprimir_informe(informe)
+    return EXIT_OK if informe.ok else EXIT_ERROR
+
+
+def comando_eval(cfg: Config, tolerancia: float, archivo: str | None) -> int:
+    """Compara la salida del pipeline contra las anotaciones manuales."""
+    from gondola.evaluate.evaluator import (
+        evaluar,
+        eventos_detectados,
+        imprimir_evaluacion,
+        leer_groundtruth,
+    )
+
+    gt = _resolver_ruta(archivo) if archivo else cfg.groundtruth_dir / f"{cfg.video_id}.csv"
+    if not gt.exists():
+        print("No hay anotaciones manuales para este video.")
+        print()
+        print(f"  Buscaba: {gt}")
+        print()
+        print("  SIN ANOTACIONES NO SE PUEDE AFIRMAR NADA SOBRE LA EXACTITUD.")
+        print("  No hay forma de saber si el sistema acierta sin que una persona")
+        print("  haya visto el video y escrito lo que de verdad pasa en el.")
+        print()
+        print("  Que hacer: copia data/groundtruth/ejemplo.csv, anota el video")
+        print("  siguiendo docs/evaluation.md y vuelve a correr este comando.")
+        return EXIT_FALTA_REQUISITO
+
+    salida = pipeline.stage_paths("interact", cfg).output_path
+    if not salida.exists():
+        raise MissingInputError(
+            f"No existe la salida a evaluar:\n    {salida}\n\n"
+            f"Que hacer: corre la cadena hasta 'interact', que es la etapa que\n"
+            f"produce los eventos de interaccion:\n"
+            f"    python -m gondola run"
+        )
+
+    anotados = leer_groundtruth(gt)
+    detectados = eventos_detectados(salida)
+    print(f"  Anotaciones: {gt}")
+    print(f"  Salida:      {salida}")
+    print()
+
+    if not anotados:
+        print("El archivo de anotaciones esta vacio: no hay contra que comparar.")
+        return EXIT_FALTA_REQUISITO
+
+    imprimir_evaluacion(evaluar(anotados, detectados, tolerancia), tolerancia)
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
 # arranque
 # --------------------------------------------------------------------------
 
@@ -286,6 +358,19 @@ def _parser() -> argparse.ArgumentParser:
         if etapa.name == "detect":
             _opciones_de_detect(sub)
     subcomandos.add_parser("run", help="Ejecuta la cadena completa en orden.")
+
+    verify = subcomandos.add_parser(
+        "verify", help="Revisa una salida contra el contrato y la privacidad."
+    )
+    verify.add_argument("archivo", nargs="?",
+                        help="Archivo .jsonl a revisar. Por defecto, el de detect.")
+
+    ev = subcomandos.add_parser(
+        "eval", help="Compara la salida contra las anotaciones manuales."
+    )
+    ev.add_argument("--groundtruth", help="CSV de anotaciones. Por defecto, <video_id>.csv")
+    ev.add_argument("--tolerance", type=float, default=2.0,
+                    help="Tolerancia temporal en segundos (defecto: 2.0).")
 
     purge = subcomandos.add_parser(
         "purge", help="Borra videos y salidas de data/ (minimizacion de datos)."
@@ -383,6 +468,10 @@ def main(argv: list[str] | None = None) -> int:
             return comando_purge(cfg, args.yes)
         if args.comando == "run":
             return comando_run(cfg)
+        if args.comando == "verify":
+            return comando_verify(cfg, args.archivo)
+        if args.comando == "eval":
+            return comando_eval(cfg, args.tolerance, args.groundtruth)
         return comando_etapa(args.comando, cfg, abrir_video=getattr(args, "open", False))
     except MissingInputError as exc:
         print(f"\nFALTA UN REQUISITO\n{exc}", file=sys.stderr)

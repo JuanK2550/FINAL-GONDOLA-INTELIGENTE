@@ -7,4 +7,5 @@ respetando `FRAME_STRIDE` y `MAX_FRAMES`, y generar el video de salida
 Es el unico lugar del proyecto que sabe de OpenCV. Si manana cambiamos de
 libreria, solo se toca esta carpeta.
 
-Vacía en la Fase 1. Se llena en la Fase 2.
+Hecho: `reader.py` (lectura de frames) y `render.py` (modos `privacy`, `debug`
+y `none`).

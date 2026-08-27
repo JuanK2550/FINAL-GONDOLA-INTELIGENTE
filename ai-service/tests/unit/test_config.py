@@ -4,6 +4,8 @@ Se le pasa un diccionario a `load_config()` en vez de tocar el entorno real:
 asi los tests no dependen de que .env exista ni de la maquina de cada quien.
 """
 
+import re
+
 import pytest
 
 from gondola.config import RAIZ, load_config
@@ -100,3 +102,37 @@ def test_el_mensaje_de_error_dice_que_hacer():
     assert "CONFIDENCE_THRESHOLD" in mensaje
     assert ".env" in mensaje
     assert "1.0" in mensaje
+
+
+# --------------------------------------------------------------------------
+# El .env.example es la documentacion de la configuracion
+# --------------------------------------------------------------------------
+
+def test_env_example_documenta_exactamente_las_variables_que_se_leen():
+    """La convencion del proyecto es que toda variable nueva se documente.
+
+    Este test la hace cumplir sola: compara las variables que `config.py` lee
+    con las que `.env.example` documenta. Si alguien anade una y se olvida del
+    .env.example (o al reves), aqui se entera, no el companero que clone el
+    repositorio la semana que viene.
+    """
+    fuente = (RAIZ / "ai-service" / "gondola" / "config.py").read_text(encoding="utf-8")
+    leidas = set(re.findall(r'env\.get\(\s*(?:env,\s*)?"([A-Z_]+)"', fuente))
+    leidas |= set(re.findall(r'_leer_\w+\(env,\s*"([A-Z_]+)"', fuente))
+
+    ejemplo = (RAIZ / ".env.example").read_text(encoding="utf-8")
+    documentadas = set(re.findall(r"^([A-Z_]+)=", ejemplo, re.MULTILINE))
+
+    assert leidas == documentadas, (
+        f"Sin documentar en .env.example: {sorted(leidas - documentadas)}. "
+        f"Documentadas pero ya no se leen: {sorted(documentadas - leidas)}."
+    )
+
+
+def test_lo_que_dice_el_env_example_es_lo_que_carga_la_configuracion():
+    """Los valores de ejemplo tienen que ser validos: es lo que copia el equipo."""
+    ejemplo = (RAIZ / ".env.example").read_text(encoding="utf-8")
+    env = dict(re.findall(r"^([A-Z_]+)=(.*)$", ejemplo, re.MULTILINE))
+    cfg = load_config(env=env)
+    assert cfg.video_id == env["VIDEO_ID"]
+    assert cfg.render_mode == "privacy"  # el defecto seguro, tambien en el ejemplo
