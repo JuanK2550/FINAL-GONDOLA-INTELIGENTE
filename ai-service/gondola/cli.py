@@ -158,6 +158,11 @@ def comando_etapa(nombre: str, cfg: Config, abrir_video: bool = False) -> int:
 
         return detect.run(cfg, abrir_video=abrir_video)
 
+    if nombre == "track":
+        from gondola.stages import track
+
+        return track.run(cfg, abrir_video=abrir_video)
+
     rutas = pipeline.stage_paths(nombre, cfg)
     etapa = rutas.stage
     anterior = pipeline.previous_stage(nombre)
@@ -357,6 +362,8 @@ def _parser() -> argparse.ArgumentParser:
         )
         if etapa.name == "detect":
             _opciones_de_detect(sub)
+        elif etapa.name == "track":
+            _opciones_de_track(sub)
     subcomandos.add_parser("run", help="Ejecuta la cadena completa en orden.")
 
     verify = subcomandos.add_parser(
@@ -392,6 +399,17 @@ def _opciones_de_detect(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--max-frames", type=int, help="Cortar tras N frames. 0 = todos.")
     sub.add_argument("--imgsz", type=int, help="Lado en pixeles para el modelo.")
     sub.add_argument("--device", choices=sorted(DEVICES_VALIDOS), help="cpu, cuda o mps.")
+    sub.add_argument("--render", choices=sorted(RENDER_MODES_VALIDOS),
+                     help="privacy (defecto), debug o none.")
+    sub.add_argument("--open", action="store_true",
+                     help="Abrir el video resultante al terminar.")
+
+
+def _opciones_de_track(sub: argparse.ArgumentParser) -> None:
+    """Mismas opciones de render que `detect` (--render y --open), con el
+    mismo nombre y el mismo significado: las etapas que siguen (zones,
+    interact, metrics) van a copiar este modulo como plantilla, y conviene
+    que a todas las opciones de render se les llame igual."""
     sub.add_argument("--render", choices=sorted(RENDER_MODES_VALIDOS),
                      help="privacy (defecto), debug o none.")
     sub.add_argument("--open", action="store_true",

@@ -19,7 +19,7 @@ pasa. Esa es la diferencia entre tapar los datos y no tenerlos.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 import cv2
 import numpy as np
@@ -66,8 +66,22 @@ class Renderer:
             )
         self._writer = writer
 
-    def write(self, frame_original, eventos: Sequence[Event], indice: int, timestamp: float) -> None:
-        """Escribe un frame. En modo privacy, `frame_original` se ignora."""
+    def write(
+        self,
+        frame_original,
+        eventos: Sequence[Event],
+        indice: int,
+        timestamp: float,
+        color_de: Callable[[Event], tuple[int, int, int]] | None = None,
+        etiqueta_de: Callable[[Event], str] | None = None,
+    ) -> None:
+        """Escribe un frame. En modo privacy, `frame_original` se ignora.
+
+        `color_de` y `etiqueta_de` son opcionales: sin ellos, cada caja sale
+        verde con su confianza (lo que necesita `detect`). Pasarlos permite
+        que otra etapa (por ejemplo `track`, con su track_id) dibuje distinto
+        sin duplicar nada de OpenCV fuera de este modulo.
+        """
         if self._writer is None:
             return
 
@@ -77,7 +91,9 @@ class Renderer:
             lienzo = frame_original.copy()
 
         for evento in eventos:
-            self._dibujar_caja(lienzo, evento)
+            color = color_de(evento) if color_de else VERDE
+            etiqueta = etiqueta_de(evento) if etiqueta_de else f"person {evento.detection.confidence:.2f}"
+            self._dibujar_caja(lienzo, evento, color, etiqueta)
 
         self._dibujar_cabecera(lienzo, indice, timestamp, len(eventos))
         self._writer.write(lienzo)
@@ -92,24 +108,37 @@ class Renderer:
             cv2.line(lienzo, (0, y), (self.ancho, y), GRIS_REJILLA, 1)
         return lienzo
 
-    def _dibujar_caja(self, lienzo: np.ndarray, evento: Event) -> None:
-        """Dibuja el rectangulo, su confianza y el punto de apoyo."""
+    def _dibujar_caja(
+        self,
+        lienzo: np.ndarray,
+        evento: Event,
+        color: tuple[int, int, int] = VERDE,
+        etiqueta: str | None = None,
+    ) -> None:
+        """Dibuja el rectangulo, su etiqueta y el punto de apoyo, en el color dado.
+
+        Sin `color` ni `etiqueta` se comporta como siempre (verde, confianza):
+        son opcionales para que `write()` pueda pasarlos por track, y para que
+        una caja se pueda dibujar suelta (como hacen los tests) sin tener que
+        inventarselos.
+        """
+        if etiqueta is None:
+            etiqueta = f"person {evento.detection.confidence:.2f}"
         caja = evento.detection.bbox
         x1, y1 = int(caja.x), int(caja.y)
         x2, y2 = int(caja.x + caja.width), int(caja.y + caja.height)
 
-        cv2.rectangle(lienzo, (x1, y1), (x2, y2), VERDE, 2)
+        cv2.rectangle(lienzo, (x1, y1), (x2, y2), color, 2)
 
-        etiqueta = f"person {evento.detection.confidence:.2f}"
         (ancho_txt, alto_txt), _ = cv2.getTextSize(etiqueta, FUENTE, 0.5, 1)
-        cv2.rectangle(lienzo, (x1, y1 - alto_txt - 6), (x1 + ancho_txt + 6, y1), VERDE, -1)
+        cv2.rectangle(lienzo, (x1, y1 - alto_txt - 6), (x1 + ancho_txt + 6, y1), color, -1)
         cv2.putText(lienzo, etiqueta, (x1 + 3, y1 - 4), FUENTE, 0.5, (20, 20, 20), 1,
                     cv2.LINE_AA)
 
         # El punto de apoyo (los pies): lo que la Persona 4 usara para ubicar a
         # la persona en el plano del piso.
         px, py = caja.support_point
-        cv2.circle(lienzo, (int(px), int(py)), 4, VERDE, -1)
+        cv2.circle(lienzo, (int(px), int(py)), 4, color, -1)
 
     def _dibujar_cabecera(self, lienzo, indice: int, timestamp: float, personas: int) -> None:
         """Frame, timestamp y conteo. En privacy es toda la informacion que hay."""
