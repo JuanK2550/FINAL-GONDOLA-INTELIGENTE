@@ -20,6 +20,11 @@ class ContractError(GondolaError):
     """Un evento no cumple el contrato de datos o no se pudo leer."""
 
 
+class ZonesConfigError(GondolaError):
+    """El archivo de zonas (gondolas/estantes de una camara) no existe o no
+    cumple su formato. Ver gondola/zones_config.py y docs/zones-format.md."""
+
+
 class PipelineError(GondolaError):
     """La cadena de etapas se pidio mal: etapa inexistente o rutas invalidas."""
 

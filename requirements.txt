@@ -7,5 +7,5 @@
 
 pydantic==2.13.4          # validacion del contrato de datos
 python-dotenv==1.2.2      # lectura del archivo .env
-opencv-python==5.0.0      # lectura de video y render (gondola/video/)
+opencv-python==5.0.0.93   # lectura de video y render (gondola/video/)
 ultralytics==8.4.129      # deteccion YOLO (arrastra torch)

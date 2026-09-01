@@ -4,10 +4,10 @@ Necesitan OpenCV, que no esta en requirements-dev.txt: se saltan solos en la
 maquina de quien no lo tenga. Por eso el importorskip esta arriba del todo.
 """
 
-import numpy as np
 import pytest
 
 cv2 = pytest.importorskip("cv2", reason="opencv no instalado")
+np = pytest.importorskip("numpy", reason="numpy no instalado")
 
 from gondola.contract import BBox, Detection, Event  # noqa: E402
 from gondola.errors import VideoError  # noqa: E402

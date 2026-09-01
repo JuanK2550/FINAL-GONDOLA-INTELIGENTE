@@ -163,6 +163,11 @@ def comando_etapa(nombre: str, cfg: Config, abrir_video: bool = False) -> int:
 
         return track.run(cfg, abrir_video=abrir_video)
 
+    if nombre == "zones":
+        from gondola.stages import zones
+
+        return zones.run(cfg)
+
     rutas = pipeline.stage_paths(nombre, cfg)
     etapa = rutas.stage
     anterior = pipeline.previous_stage(nombre)
