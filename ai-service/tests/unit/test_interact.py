@@ -66,6 +66,22 @@ ALCANCE = [120.0, 124.0, 128.0, 132.0, 136.0, 140.0, 136.0, 132.0, 128.0,
 # su propia linea base. Ver "EL TECHO DEL METODO" en el docstring del modulo.
 ALCANCE_CORTO = ALCANCE[:11]
 
+# El frame en el que dwell_time cruza UMBRAL_SE_DETIENE_S cuando el dwell sube
+# a razon de 1 s por segundo de video: es donde sale el APPROACH.
+FRAME_DEL_APPROACH = int(UMBRAL_SE_DETIENE_S * FPS)
+
+
+def rampa(n_muestras, base=120.0, pico=140.0) -> list[float]:
+    """El mismo gesto estirado en `n_muestras`: la caja se ensancha de `base`
+    a `pico` y vuelve.
+
+    Cambia solo la DURACION, no la forma ni la amplitud. Es lo que hace falta
+    para medir hasta que velocidad de gesto llega el metodo.
+    """
+    mitad = n_muestras // 2
+    sube = [base + (pico - base) * i / mitad for i in range(mitad)]
+    return sube + [pico] + sube[::-1][:n_muestras - mitad - 1]
+
 
 def crear_evento(frame, ancho=ANCHO_BASE, centro_x=CENTRO_X, y=400.0,
                  alto=ALTO_BASE, track_id=1, zone_id="gondola_A",
@@ -303,10 +319,16 @@ def test_las_muestras_por_gesto_bajan_al_subir_el_stride():
 
 def test_un_alcance_produce_un_solo_evento_en_el_pico(tmp_path):
     """La decision que afecta a la Persona 6: 40 frames marcados serian 39
-    falsos positivos para el evaluador. Uno solo, en el frame del maximo."""
+    falsos positivos para el evaluador. Uno solo, en el frame del maximo.
+
+    Ni cero ni tres: se comprueban las tres cuentas del resumen, no solo que
+    haya un PICK_UP en la lista.
+    """
     salida, resumen = procesar(tmp_path, con_alcance())
     assert interacciones(salida) == [(25, "PICK_UP")]  # 20 de base + 5 de rampa
     assert resumen.pick_up == 1
+    assert resumen.put_back == 0
+    assert resumen.approach == 0
     assert resumen.episodios_candidatos == 1
 
 
@@ -471,6 +493,46 @@ def test_una_caja_ensanchada_mucho_tiempo_se_vuelve_su_propia_linea_base(tmp_pat
     assert len(salida) == len(eventos)  # la cola no se quedo con ninguno
 
 
+def test_un_gesto_lento_no_se_detecta_y_no_deja_rastro_en_ningun_contador(tmp_path):
+    """EL TECHO ESTRUCTURAL DEL METODO, con el mismo gesto a dos velocidades.
+
+    `rampa()` estira el MISMO gesto -misma forma, misma amplitud- en mas
+    muestras. Lo unico que cambia es cuanto dura, y eso decide si se ve o no:
+
+        0,37 s  ->  PICK_UP
+        0,50 s  ->  el episodio se forma pero sale truncado y lo descarta el
+                    filtro de duracion
+        0,63 s  ->  NO SE FORMA NINGUN EPISODIO
+
+    La causa esta en el docstring del modulo: la mediana esta CENTRADA, asi
+    que en cuanto el gesto ocupa mas de la mitad de la ventana (+-0,5 s) la
+    mayoria de las muestras que la componen son del propio gesto, la mediana
+    sube hasta el y la razon vuelve a 1,0.
+
+    LO GRAVE NO ES QUE NO LO DETECTE, ES QUE NO SE ENTERA: a partir de 0,63 s
+    el contador de episodios candidatos se queda en cero, asi que el gesto
+    perdido no aparece en el embudo de descartes que imprime la etapa. Quien
+    lea el resumen de una corrida no puede distinguir "no hubo gestos" de
+    "los hubo y fueron demasiado lentos". Un gesto real de tomar un producto
+    dura 0,5-1,5 s (fase 1), o sea que cae entero en esta zona ciega.
+
+    Este test NO comprueba que el comportamiento sea deseable: fija donde
+    esta el techo hoy, para que se note si alguien mueve la ventana o el
+    umbral al recalibrar con groundtruth.
+    """
+    base = [ANCHO_BASE] * 25
+
+    rapido = secuencia(base + rampa(12) + base)  # 0,37 s
+    salida, resumen = procesar(tmp_path, rapido)
+    assert [tipo for _frame, tipo in interacciones(salida)] == ["PICK_UP"]
+    assert resumen.episodios_candidatos == 1
+
+    lento = secuencia(base + rampa(20) + base)  # 0,63 s
+    salida, resumen = procesar(tmp_path, lento)
+    assert interacciones(salida) == []
+    assert resumen.episodios_candidatos == 0  # invisible, no descartado
+
+
 # --------------------------------------------------------------------------
 # APPROACH: uno por visita, en el cruce del umbral de la Persona 4
 # --------------------------------------------------------------------------
@@ -520,6 +582,81 @@ def test_dos_tracks_no_comparten_ni_visita_ni_refractario(tmp_path):
     dos = visita_que_se_detiene(track_id=2, centro_x=700.0)
     salida, resumen = procesar(tmp_path, [e for par in zip(uno, dos) for e in par])
     assert resumen.approach == 2
+
+
+def test_quien_solo_pasa_caminando_no_genera_ninguna_interaccion(tmp_path):
+    """Alguien que cruza el pasillo sin parar: ni APPROACH ni alcances.
+
+    Es el caso que mas veces se da en un video de tienda y el que mas caro
+    saldria equivocar: cada falso positivo aqui inflaria la tasa de
+    interaccion de una gondola por la que la gente solo pasa. Se comprueba la
+    ausencia COMPLETA -las tres cuentas en cero y ni un episodio candidato-,
+    no solo que no haya APPROACH.
+    """
+    eventos = [
+        crear_evento(frame=i, centro_x=200.0 + 12.0 * i, dwell=i / FPS)
+        for i in range(45)  # 1,5 s cruzando: el dwell no llega a 2,0
+    ]
+    salida, resumen = procesar(tmp_path, eventos)
+
+    assert interacciones(salida) == []
+    assert (resumen.approach, resumen.pick_up, resumen.put_back) == (0, 0, 0)
+    assert resumen.episodios_candidatos == 0
+    assert len(salida) == len(eventos)  # pero sus eventos salen todos
+
+
+# --------------------------------------------------------------------------
+# APPROACH y alcance a menos de un refractario: comportamiento ACTUAL
+# --------------------------------------------------------------------------
+
+def visita_con_alcance_en(frame_alcance, n=140, **kw) -> list[Event]:
+    """Una visita que se detiene (dwell subiendo) con un alcance en el frame
+    indicado. Es la forma de la unica interaccion real de `video_001`."""
+    anchos = [ANCHO_BASE] * n
+    for i, ancho in enumerate(ALCANCE):
+        anchos[frame_alcance + i] = ancho
+    return [
+        crear_evento(frame=i, ancho=ancho, dwell=i / FPS, **kw)
+        for i, ancho in enumerate(anchos)
+    ]
+
+
+def test_un_alcance_a_menos_de_un_refractario_del_approach_se_pierde(tmp_path):
+    """COMPORTAMIENTO ACTUAL CONOCIDO, no una propiedad deseada.
+
+    El periodo refractario es GLOBAL por track_id: cuenta desde el ultimo
+    evento emitido, sea del tipo que sea. Asi que un APPROACH deja al track
+    mudo durante REFRACTARIO_S, y si la persona alcanza el estante dentro de
+    ese segundo -que es exactamente lo que hace alguien que se para frente a
+    una gondola y toma algo-, el alcance se descarta.
+
+    ESTO PASO DE VERDAD: en `video_001` es la razon de que salgan 0 PICK_UP.
+    El unico episodio que supero los filtros fisicos (track 9, pico en
+    t=98,17 s, 0,300 s de duracion, pies quietos) cayo 0,83 s despues del
+    APPROACH de su propio track y se perdio ahi.
+
+    El test fija ese comportamiento para que el dia que el lider decida si el
+    refractorio se separa por tipo de evento, quede constancia de que cambio
+    a proposito y no por accidente. La fase 3 no toca esa logica.
+    """
+    eventos = visita_con_alcance_en(FRAME_DEL_APPROACH + 5)  # pico 0,33 s despues
+    salida, resumen = procesar(tmp_path, eventos)
+
+    assert interacciones(salida) == [(FRAME_DEL_APPROACH, "APPROACH")]
+    assert resumen.episodios_candidatos == 1  # el gesto SI se detecto
+    assert resumen.descartados_por_refractario == 1  # y se tiro aqui
+    assert resumen.pick_up == 0
+
+
+def test_el_mismo_alcance_pasado_el_refractario_si_sale(tmp_path):
+    """La contraparte del anterior, y la prueba de que lo que bloquea el
+    alcance es el refractorio y no un defecto del gesto: el MISMO gesto, mas
+    lejos del APPROACH, se emite sin tocar ningun umbral."""
+    eventos = visita_con_alcance_en(FRAME_DEL_APPROACH + 40)  # pico 1,5 s despues
+    salida, resumen = procesar(tmp_path, eventos)
+
+    assert [tipo for _frame, tipo in interacciones(salida)] == ["APPROACH", "PICK_UP"]
+    assert resumen.descartados_por_refractario == 0
 
 
 # --------------------------------------------------------------------------
