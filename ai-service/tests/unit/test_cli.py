@@ -30,10 +30,11 @@ from gondola.errors import (
 from gondola.logging_setup import setup_logging
 from gondola.pipeline import STAGE_NAMES, STAGES, stage_paths
 
-# 'detect' (Fase 3), 'track' (Fase 2 de la Persona 3) y 'zones' (Fase 2 de la
-# Persona 4) ya estan implementadas, asi que no imprimen el texto de
+# 'detect' (Fase 3), 'track' (Persona 3), 'zones' (Persona 4) e 'interact'
+# (Persona 5) ya estan implementadas, asi que no imprimen el texto de
 # placeholder. Los tests de placeholder van sobre las que siguen pendientes.
-ETAPAS_PENDIENTES = [e for e in STAGES if e.name not in ("detect", "track", "zones")]
+ETAPAS_IMPLEMENTADAS = ("detect", "track", "zones", "interact")
+ETAPAS_PENDIENTES = [e for e in STAGES if e.name not in ETAPAS_IMPLEMENTADAS]
 
 
 @pytest.fixture(autouse=True)

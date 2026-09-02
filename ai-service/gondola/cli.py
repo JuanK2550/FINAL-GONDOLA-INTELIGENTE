@@ -168,6 +168,11 @@ def comando_etapa(nombre: str, cfg: Config, abrir_video: bool = False) -> int:
 
         return zones.run(cfg)
 
+    if nombre == "interact":
+        from gondola.stages import interact
+
+        return interact.run(cfg)
+
     rutas = pipeline.stage_paths(nombre, cfg)
     etapa = rutas.stage
     anterior = pipeline.previous_stage(nombre)
