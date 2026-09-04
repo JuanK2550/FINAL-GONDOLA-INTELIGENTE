@@ -289,13 +289,16 @@ def _avisar_progreso(resumen: Resumen, indice: int, info) -> None:
 def run(cfg: Config, abrir_video: bool = False) -> int:
     """Ejecuta la deteccion completa. Devuelve el codigo de salida."""
     from gondola.video.reader import VideoReader
-    from gondola.video.render import Renderer, abrir_con_el_sistema
 
     rutas = pipeline.stage_paths("detect", cfg)
     resumen = Resumen()
 
     print(f"[detect] Video:  {rutas.input_path}")
     with VideoReader(rutas.input_path) as video:
+        # Se importa aqui, tras confirmar que el video existe: si faltara,
+        # el aviso de "falta el video" no debe depender de tener cv2 instalado.
+        from gondola.video.render import Renderer, abrir_con_el_sistema
+
         print(f"[detect] Fuente: {video.info.resumen()}")
 
         modelo, ids_persona = _cargar_modelo(cfg)

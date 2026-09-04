@@ -7,18 +7,23 @@ OpenCV avisa de los errores devolviendo False o None, nunca lanzando
 excepciones. Si no se comprueba cada retorno, el fallo aparece 200 lineas
 despues como un "NoneType no tiene shape" que no le dice nada a nadie. Por eso
 aqui se comprueba todo y se traduce a errores del proyecto.
+
+OpenCV y numpy no estan en requirements-dev.txt (ver docstring de
+gondola/stages/detect.py), asi que se importan dentro de los metodos: crear
+un VideoReader sobre un video que no existe debe fallar con MissingInputError
+sin necesitar cv2 instalado.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
-
-import cv2
-import numpy as np
+from typing import TYPE_CHECKING, Iterator
 
 from gondola.errors import MissingInputError, VideoError
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,8 @@ class VideoReader:
                 f"     python scripts/make_test_clips.py"
             )
 
+        import cv2
+
         self._cap = cv2.VideoCapture(str(self.path))
         if not self._cap.isOpened():
             raise VideoError(
@@ -84,6 +91,8 @@ class VideoReader:
 
     def _leer_info(self) -> VideoInfo:
         """Lee las propiedades del video y comprueba que tengan sentido."""
+        import cv2
+
         fps = float(self._cap.get(cv2.CAP_PROP_FPS))
         ancho = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         alto = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
