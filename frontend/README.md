@@ -36,9 +36,18 @@ archivo, ~1200 líneas). Se dice en voz alta en vez de esconderlo:
 
 ## Qué hace
 
-- Selector de video, con etiqueta clara de si son datos reales o de prueba
-  (`video_id` que empieza por `video_demo_` → "PRUEBA"; cualquier otro →
-  "PRODUCCIÓN REAL").
+- Portada de bienvenida (`renderPantallaInicio()`) al abrir el archivo: el
+  logo, un resumen de qué hace el proyecto y qué puede hacer, y un botón
+  "Entrar al panel". Es una portada, no una pantalla de carga: no vuelve a
+  aparecer hasta que se recarga la página.
+- Selector de video, con etiqueta clara de si son datos reales o de prueba.
+  La etiqueta NO se basa en el prefijo del `video_id` (se rompía con videos
+  reales importados como `video_demo_merl_*`, del dataset MERL Shopping
+  Dataset): en modo demo usa el prefijo `video_demo_`, conectado a la API
+  real usa una lista explícita de los videos que sí pasaron por el pipeline
+  (`VIDEOS_REALES_CONOCIDOS` en `index.html`) — todo lo demás que devuelva
+  la API pero no esté ahí (fixtures viejos armados a mano, como
+  `video_demo_001`/`video_demo_002`) también se etiqueta "PRUEBA".
 - Resumen general (personas, interacciones, pick-ups, put-backs, tasa de
   rechazo, permanencia media), con los números animados al cargar (cuentan
   hacia arriba, no aparecen de golpe).
@@ -47,15 +56,47 @@ archivo, ~1200 líneas). Se dice en voz alta en vez de esconderlo:
   reglas simples a partir de los números reales (no inventa datos; si no hay
   evidencia suficiente, no dice nada). No es el motor de recomendaciones con
   nivel de confianza que describe el reto — es un primer paso, más simple.
-- Espacio reservado y claramente etiquetado ("PRÓXIMAMENTE") para el mapa de
-  calor: la API todavía no expone coordenadas para pintarlo, así que no se
-  inventa uno.
+- Mapa de calor real, por coordenadas: consume `GET /videos/{id}/positions`
+  (el punto de apoyo — los pies — de cada evento, en píxeles del frame
+  original) y pinta una densidad continua con [heatmap.js](https://www.patrick-wied.at/static/heatmapjs/)
+  (CDN), no un agregado coloreado por zona. Cada punto se reescala del
+  tamaño del frame original al tamaño en pantalla del contenedor
+  (`initPositionsHeatmap()` en `index.html`). Debajo sigue el "Resumen por
+  Zona" (antes se llamaba "Mapa de Calor de Zonas"): tarjetas por
+  góndola/estante y el ranking de interacción — sigue siendo útil como
+  agregado, pero ya no es lo único que hay.
 - Modo demostración con datos **inventados a mano** (para explorar la
   interfaz sin tener la API corriendo) — dos videos ficticios,
   `video_demo_pasillo_01` y `video_demo_cabecera`, con números que no salen
   de ningún video ni cálculo real. Siempre etiquetados como prueba en la UI.
   Un modal (ícono ⚙️ en el header) permite apagar el modo demo, cambiar la
   URL de la API o probar la conexión.
+- Video anonimizado embebido: `GET /videos/{id}/render` reproducido en un
+  `<video>` normal (fondo gris inventado, cajas de detección, y una
+  insignia + contador acumulado de "productos" en la cabecera cuando hay
+  un PICK_UP/PUT_BACK). El `<video>` vive en un "portal" fuera de `#root`
+  (`crearReproductorPersistente()` en `index.html`), no dentro de la
+  plantilla que se reconstruye en cada `render()`: si viviera ahí adentro,
+  cada dato nuevo que llega (zonas, posiciones, métricas llegan por
+  separado) interrumpía la descarga a medias y el navegador la reportaba
+  como error aunque el servidor respondiera bien — bug real, ya resuelto.
+- "Retroalimentación": explica en lenguaje llano por qué salen ciertos
+  números (tasas en 0%, conteos que no cuadran, video demasiado corto),
+  sin tener que ver el video completo. Reglas simples sobre los números ya
+  calculados, nada de IA (`generarNotasFeedback()`).
+- **Comparar dos videos**, en su propio apartado (botón junto al selector,
+  no una tarjeta más de la pantalla principal — mezclar los dos causaba el
+  mismo bug de video en blanco que arriba). Trae el paquete completo de
+  cada video (`loadCompareData()`) y muestra, lado a lado: resumen general,
+  análisis por zona, mapa de calor, resumen por zona y retroalimentación —
+  no solo 4 números sueltos. El mismo video no se puede elegir en los dos
+  lados a la vez.
+- **Exportar a PDF y Excel** (botones junto al selector, solo si hay un
+  video elegido): PDF usa `window.print()` con una hoja de estilos de
+  impresión que oculta botones/navegación y agrega un encabezado de
+  reporte — el texto queda seleccionable en el PDF, no es una captura de
+  pantalla. Excel descarga un `.csv` (sin librerías nuevas) con el mismo
+  resumen, tabla por zona y retroalimentación que se ve en pantalla.
 
 ### Sistema de diseño (para quien lo siga tocando)
 
@@ -90,7 +131,11 @@ archivo, ~1200 líneas). Se dice en voz alta en vez de esconderlo:
   la Persona 8 en los prompts del equipo).
 - No hay optimización para ejecución *edge* ni contenedor Docker.
 - No hay integración de extremo a extremo ni pruebas de robustez.
-- El mapa de calor es un espacio reservado, no una funcionalidad.
+- El mapa de calor por coordenadas no dibuja los contornos de las góndolas
+  ni del piso de la tienda sobre la densidad (solo el fondo oscuro liso):
+  falta un plano de referencia para superponer.
+- Exportar a PDF/Excel solo existe en el panel de un solo video, no en la
+  vista de comparación.
 
 ## Limitaciones del video actual (`video_001`)
 
@@ -117,7 +162,7 @@ pipeline que el dashboard simplemente refleja con honestidad.
 
 **Nada localmente.** No hay `npm install`, no hay build. Solo hace falta un
 navegador moderno y, la primera vez que se abre, **conexión a internet**:
-la página carga estas tres cosas desde CDN público en vez de traerlas
+la página carga estas cuatro cosas desde CDN público en vez de traerlas
 empaquetadas:
 
 | Qué | De dónde | Versión fijada |
@@ -125,6 +170,7 @@ empaquetadas:
 | Tailwind CSS | `https://cdn.tailwindcss.com` | **No.** Siempre trae la última. |
 | Fuente Plus Jakarta Sans | `https://fonts.googleapis.com` | Estable por diseño de Google Fonts. |
 | Iconos Phosphor | `https://unpkg.com/@phosphor-icons/web` | **No.** Siempre trae la última. |
+| heatmap.js (mapa de calor) | `https://cdn.jsdelivr.net/npm/heatmap.js@2.0.5/...` | **Sí,** `2.0.5`. |
 
 **Gap conocido, a diferencia del resto del proyecto:** `ai-service` y
 `backend` fijan la versión exacta de cada dependencia

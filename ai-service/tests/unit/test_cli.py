@@ -30,10 +30,11 @@ from gondola.errors import (
 from gondola.logging_setup import setup_logging
 from gondola.pipeline import STAGE_NAMES, STAGES, stage_paths
 
-# 'detect' (Fase 3), 'track' (Persona 3), 'zones' (Persona 4) e 'interact'
-# (Persona 5) ya estan implementadas, asi que no imprimen el texto de
-# placeholder. Los tests de placeholder van sobre las que siguen pendientes.
-ETAPAS_IMPLEMENTADAS = ("detect", "track", "zones", "interact")
+# 'detect' (Fase 3), 'track' (Persona 3), 'zones' (Persona 4), 'interact'
+# (Persona 5) y 'metrics' (Persona 6) ya estan implementadas, asi que no
+# imprimen el texto de placeholder. Los tests de placeholder van sobre las
+# que siguen pendientes.
+ETAPAS_IMPLEMENTADAS = ("detect", "track", "zones", "interact", "metrics")
 ETAPAS_PENDIENTES = [e for e in STAGES if e.name not in ETAPAS_IMPLEMENTADAS]
 
 
@@ -123,6 +124,15 @@ def test_track_sin_su_entrada_dice_que_corras_detect_primero(capsys):
     assert main(["track"]) == EXIT_FALTA_REQUISITO
     salida = capsys.readouterr()
     assert "python -m gondola detect" in salida.err
+    assert "Traceback" not in salida.err
+
+
+def test_metrics_sin_su_entrada_dice_que_corras_interact_primero(capsys):
+    """metrics ya esta implementada: sin video_001.interact.jsonl debe fallar
+    con codigo 2 y un mensaje claro, nunca con un traceback."""
+    assert main(["metrics"]) == EXIT_FALTA_REQUISITO
+    salida = capsys.readouterr()
+    assert "python -m gondola interact" in salida.err
     assert "Traceback" not in salida.err
 
 
