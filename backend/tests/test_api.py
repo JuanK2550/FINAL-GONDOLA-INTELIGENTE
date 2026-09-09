@@ -63,6 +63,19 @@ def test_resumen_de_video_cuenta_personas_distintas(video_importado):
     assert cuerpo["put_back_count"] == 0
 
 
+def test_permanencia_media_promedia_personas_no_filas_de_evento(video_importado):
+    """Bug real: `AVG(dwell_time_s)` a secas promedia FILAS DE EVENTO (un
+    evento por frame, con `dwell_time_s` ACUMULADO que crece en cada uno),
+    no personas -sesgaba el numero hacia la mitad del tiempo real. Con los
+    eventos de `_preparar_archivos` (track 1: dwell 1.0, 2.0, 3.0; track 2:
+    dwell 0.5; track 3: sin dwell): el promedio correcto es sobre el
+    MAXIMO de cada track_id -(3.0 + 0.5) / 2 = 1.75-, no sobre las 4 filas
+    con dwell -(1.0+2.0+3.0+0.5)/4 = 1.625-."""
+    respuesta = cliente.get(f"/videos/{video_importado}")
+    assert respuesta.status_code == 200
+    assert respuesta.json()["average_dwell_time_s"] == pytest.approx(1.75)
+
+
 def test_metricas_del_video_devuelve_una_fila_por_zona(video_importado):
     respuesta = cliente.get(f"/videos/{video_importado}/metrics")
     assert respuesta.status_code == 200
@@ -78,3 +91,43 @@ def test_metricas_de_zona_desconocida_da_404(video_importado):
     respuesta = cliente.get(f"/videos/{video_importado}/metrics/zona_que_no_existe")
     assert respuesta.status_code == 404
     assert "zona_que_no_existe" in respuesta.json()["detail"]
+
+
+def test_borrar_un_video_lo_quita_de_la_lista_y_de_sus_endpoints(video_importado):
+    respuesta = cliente.delete(f"/videos/{video_importado}")
+    assert respuesta.status_code == 200
+    cuerpo = respuesta.json()
+    assert cuerpo["video_id"] == video_importado
+    assert cuerpo["borrado"] is True
+
+    assert video_importado not in [v["video_id"] for v in cliente.get("/videos").json()]
+    assert cliente.get(f"/videos/{video_importado}").status_code == 404
+
+
+def test_borrar_un_video_no_toca_las_zonas_de_otro_video(video_importado, db_conn):
+    """Las zonas ('gondola_A', 'estante_1'...) son globales -compartidas
+    entre videos que reusan la misma calibracion de camara-, no propiedad
+    de un solo video: borrar uno no debe llevarse la zona por delante."""
+    cliente.delete(f"/videos/{video_importado}")
+    gondola_id = f"{video_importado}_gondola_A"
+    fila = db_conn.execute(
+        "SELECT 1 FROM zones WHERE zone_id = %(id)s", {"id": gondola_id}
+    ).fetchone()
+    assert fila is not None, "borrar el video se llevo su zona, y no deberia"
+
+
+def test_borrar_un_video_que_no_existe_da_404(_servidor_disponible):
+    # Con prefijo `subido_` para que pase el chequeo de "es un video
+    # subido" y llegue de verdad a comprobar que no existe en la base.
+    respuesta = cliente.delete("/videos/subido_video_que_no_existe")
+    assert respuesta.status_code == 404
+    assert "subido_video_que_no_existe" in respuesta.json()["detail"]
+
+
+def test_borrar_un_video_de_ejemplo_sin_prefijo_subido_da_403(_servidor_disponible):
+    """`video_001`, `video_demo_merl_*`... no llevan el prefijo `subido_`
+    -son de ejemplo, no subidos por un usuario- y el endpoint debe
+    rechazar borrarlos aunque existan, sin tocar la base de datos."""
+    respuesta = cliente.delete("/videos/video_001")
+    assert respuesta.status_code == 403
+    assert "video_001" in respuesta.json()["detail"]

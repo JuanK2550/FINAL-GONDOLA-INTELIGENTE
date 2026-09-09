@@ -164,6 +164,31 @@ def find_video(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | None
     ).fetchone()
 
 
+def delete_video(conn: psycopg.Connection, video_id: str) -> bool:
+    """Borra un video de PostgreSQL. Devuelve True si de verdad habia una
+    fila que borrar, False si `video_id` no existia (para que el que llama
+    decida si eso es un 404).
+
+    Una sola sentencia: `events`/`metrics` tienen `ON DELETE CASCADE` contra
+    `videos.id` (ver schema.sql), asi que se van solos con la fila padre. Las
+    filas de `zones` NUNCA se tocan aqui a proposito -son globales
+    ('gondola_A', 'estante_1'...), compartidas entre videos que reusan la
+    misma calibracion de camara (ver docs/zones-format.md); borrar un video
+    no debe borrar la zona si otro video todavia la usa-.
+
+    No borra ningun archivo de disco (`data/videos/<id>.mp4`,
+    `data/output/<id>.*`, `data/zones/<id>.json`): esta funcion solo quita
+    el video de la base de datos, que es lo que lo hace aparecer en el
+    dashboard. Quien llame a esto decide aparte si tambien quiere borrar los
+    archivos (ver DELETE /videos/{video_id} en api.py)."""
+    fila = conn.execute(
+        "DELETE FROM videos WHERE video_id = %(video_id)s RETURNING id",
+        {"video_id": video_id},
+    ).fetchone()
+    conn.commit()
+    return fila is not None
+
+
 # ----------------------------------------------------------------------------
 # Zonas
 # ----------------------------------------------------------------------------
@@ -293,6 +318,17 @@ def video_summary(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | N
     Se calcula sobre `events` (no sobre `metrics`) para dar un numero de
     video completo sin depender de como este particionado `metrics` por
     zona/ventana.
+
+    `average_dwell_time_s` NO es `AVG(e.dwell_time_s)` a secas -bug real,
+    encontrado en la practica: `dwell_time_s` es un valor ACUMULADO que se
+    repite y crece en cada evento de la misma persona (un evento por frame),
+    asi que promediar todas las filas mezcla el `dwell_time_s` de recien
+    llegada con el de quien ya lleva rato, y el resultado sesga hacia la
+    mitad del tiempo real (`video_005` mostraba 11.25s cuando la permanencia
+    real era 6.06s). El promedio correcto es sobre PERSONAS: el
+    `dwell_time_s` MAXIMO visto por cada `track_id` (su ultimo evento, que
+    ya trae el acumulado completo), promediado entre las personas distintas
+    -mismo criterio que ya usa `gondola/stages/metrics.py` por zona-.
     """
     return conn.execute(
         """
@@ -302,7 +338,17 @@ def video_summary(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | N
             COUNT(*) FILTER (WHERE e.interaction_event IS NOT NULL)          AS interaction_count,
             COUNT(*) FILTER (WHERE e.interaction_event = 'PICK_UP')          AS pick_up_count,
             COUNT(*) FILTER (WHERE e.interaction_event = 'PUT_BACK')         AS put_back_count,
-            AVG(e.dwell_time_s)                                             AS average_dwell_time_s
+            (
+                SELECT AVG(dwell_maximo.valor)
+                FROM (
+                    SELECT MAX(e2.dwell_time_s) AS valor
+                    FROM events e2
+                    WHERE e2.video_id = v.id
+                      AND e2.track_id IS NOT NULL
+                      AND e2.dwell_time_s IS NOT NULL
+                    GROUP BY e2.track_id
+                ) AS dwell_maximo
+            ) AS average_dwell_time_s
         FROM videos v
         LEFT JOIN events e ON e.video_id = v.id
         WHERE v.video_id = %(video_id)s

@@ -9,9 +9,14 @@ El paso de zonas no se puede saltar: son rectangulos en pixeles de una
 camara concreta, y sin ese archivo el importador se niega a importar.
 
 El prevuelo comprueba que el archivo abra, que duracion/resolucion/fps
-esten en rango y que YOLO encuentre PERSONAS. No comprueba que sea una
-gondola: YOLO detecta las 80 clases de COCO, no clasifica escenas. De eso
-responde quien sube el video, y por eso lo declara antes.
+esten en rango, que la CAMARA sea fija (ver `_fraccion_camara_en_movimiento`)
+y que YOLO encuentre PERSONAS. No comprueba que la escena sea una gondola:
+YOLO detecta las 80 clases de COCO (no existe una clase "gondola" ni
+"estante" en ese catalogo), y el chequeo de camara fija solo descarta
+video grabado a mano/con paneo/con cortes de escena -una calle grabada con
+tripode tambien pasaria ese chequeo-. Verificar que la escena ES una
+gondola de verdad queda en manos de quien sube el video, y por eso lo
+declara antes (`confirma_gondola`).
 
 Privacidad: el video no sale de esta maquina y se BORRA si el prevuelo lo
 rechaza. El frame para calibrar se elige entre los que no tienen ninguna
@@ -47,6 +52,12 @@ ZONES_DIR = RAIZ / "data" / "zones"
 OUTPUT_DIR = RAIZ / "data" / "output"
 AI_SERVICE_DIR = RAIZ / "ai-service"
 
+PREFIJO_VIDEO_SUBIDO = "subido_"
+"""Todo video_id que genera este modulo (ver `subir()`) empieza asi. Es la
+unica forma en la que el resto del sistema distingue "lo subio un usuario
+desde el dashboard" de "es uno de los videos de ejemplo ya en la base
+-`video_001`, `video_demo_merl_*`-": esos nunca llevan este prefijo."""
+
 # --------------------------------------------------------------------------
 # Limites del prevuelo. Son numeros con motivo, no gustos:
 # --------------------------------------------------------------------------
@@ -75,6 +86,27 @@ MIN_FRACCION_CON_PERSONAS = 0.15
 Por debajo de eso el video puede ser de una tienda, pero no hay a quien
 seguir: la cadena entera daria cero, y es mejor decirlo antes de gastar
 10 minutos de CPU que despues."""
+
+UMBRAL_MOVIMIENTO_CAMARA = 0.3
+ANCLAS_MOVIMIENTO = 6
+SALTO_MOVIMIENTO_S = 0.5
+"""Una camara de vigilancia que monitorea una gondola es FIJA: entre dos
+capturas separadas por medio segundo, solo cambia la parte del cuadro
+donde hay gente caminando -en pruebas sinteticas (camara fija + una
+"persona" moviendose), la fraccion cambiada quedo bajo 4%, con margen de
+sobra para ruido de video real (compresion, parpadeo de luces, varias
+personas a la vez)-. Un video grabado a mano, con paneo, zoom, o editado
+con cortes de escena cambia CASI TODO el cuadro de una vez: en las mismas
+pruebas, un paneo constante de ~90 px/s dio ~32%, ya por encima del
+umbral. Se comparan `ANCLAS_MOVIMIENTO` pares de frames, repartidos por
+todo el video pero cada par separado solo `SALTO_MOVIMIENTO_S` segundos
+-no los mismos frames que se muestrean para personas, mas abajo, que estan
+separados por minutos: un salto tan corto aisla el movimiento de CAMARA en
+el momento, sin confundirlo con que la escena cambia naturalmente a lo
+largo de un video largo (mas gente entra, cambia la luz, etc.)-. No es una
+prueba de que la escena sea una gondola -YOLO no tiene esa clase, ver el
+docstring del modulo-, pero descarta de entrada clips que claramente no
+vienen de una camara fija."""
 
 ETAPAS = ("detect", "track", "zones", "interact", "metrics")
 
@@ -165,6 +197,32 @@ def _sanear(nombre: str) -> str:
     return base[:40] or "video"
 
 
+def _fraccion_camara_en_movimiento(cv2: Any, captura: Any, total: int, fps: float) -> float:
+    """Promedio de que fraccion del cuadro cambia drasticamente entre pares
+    de frames cercanos en el tiempo, repartidos por todo el video. Alto si
+    la camara paneo/se movio/hubo un corte de escena; bajo si la camara es
+    fija y solo se movio la gente. Ver el docstring de UMBRAL_MOVIMIENTO_CAMARA."""
+    salto = max(1, round(fps * SALTO_MOVIMIENTO_S))
+    limite = total - 1 - salto
+    anclas = [int(i * limite / (ANCLAS_MOVIMIENTO - 1)) for i in range(ANCLAS_MOVIMIENTO)] if limite > 0 else [0]
+
+    fracciones: list[float] = []
+    for ancla in anclas:
+        captura.set(cv2.CAP_PROP_POS_FRAMES, ancla)
+        ok1, frame1 = captura.read()
+        captura.set(cv2.CAP_PROP_POS_FRAMES, ancla + salto)
+        ok2, frame2 = captura.read()
+        if not (ok1 and ok2):
+            continue
+        gris1 = cv2.GaussianBlur(cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+        gris2 = cv2.GaussianBlur(cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+        diferencia = cv2.absdiff(gris1, gris2)
+        cambiados = int((diferencia > 25).sum())
+        fracciones.append(cambiados / diferencia.size)
+
+    return sum(fracciones) / len(fracciones) if fracciones else 0.0
+
+
 def _revisar(ruta: Path) -> dict[str, Any]:
     """Abre el video, mide, y pasa YOLO por una muestra de frames.
 
@@ -203,6 +261,22 @@ def _revisar(ruta: Path) -> dict[str, Any]:
         captura.release()
         return {"apto": False, "motivo": f"El video dura {duracion / 60:.1f} min, mas del maximo de {DURACION_MAX_S / 60:g} min.", **medidas}
 
+    fraccion_movimiento = _fraccion_camara_en_movimiento(cv2, captura, total, fps)
+    medidas["fraccion_movimiento_camara"] = round(fraccion_movimiento, 3)
+    if fraccion_movimiento > UMBRAL_MOVIMIENTO_CAMARA:
+        captura.release()
+        return {
+            "apto": False,
+            "motivo": (
+                f"La camara se mueve demasiado para ser una camara fija de vigilancia "
+                f"({fraccion_movimiento:.0%} del cuadro cambia entre capturas cercanas en el "
+                f"tiempo, maximo {UMBRAL_MOVIMIENTO_CAMARA:.0%}). Una gondola se monitorea con "
+                "una camara fija; un video grabado a mano, con paneo, zoom, o con cortes de "
+                "escena no sirve para medir dwell time por coordenadas."
+            ),
+            **medidas,
+        }
+
     from ultralytics import YOLO
 
     modelo = YOLO(str(RAIZ / "data" / "models" / "yolo11n.pt"))
@@ -211,6 +285,7 @@ def _revisar(ruta: Path) -> dict[str, Any]:
     mejor_frame_vacio: Any = None
     mejor_frame_lleno: Any = None
     menos_personas = 10**9
+    puntos_pies: list[dict[str, float]] = []
 
     for indice in indices:
         captura.set(cv2.CAP_PROP_POS_FRAMES, indice)
@@ -223,6 +298,19 @@ def _revisar(ruta: Path) -> dict[str, Any]:
             con_personas += 1
             if cuantas < menos_personas:
                 menos_personas, mejor_frame_lleno = cuantas, frame
+            # El punto de apoyo (centro del borde inferior de la caja, los
+            # pies) de cada persona vista en el prevuelo: mismo calculo que
+            # `BBox.support_point` en el contrato, pero calculado aqui a
+            # mano porque el prevuelo trabaja con cajas crudas de YOLO
+            # (xyxy), no con el contrato todavia -eso lo arma recien
+            # 'detect', que ni siquiera ha corrido-. Sirve de GUIA VISUAL
+            # en la pantalla de calibracion: en vez de adivinar donde para
+            # la gente frente al estante, quien calibra ve puntos de gente
+            # REAL de este mismo video. Coordenadas de pixeles del frame
+            # -no de nadie identificable, es literalmente un punto (x, y)-.
+            for caja in resultado.boxes:
+                x1, y1, x2, y2 = (float(v) for v in caja.xyxy[0].tolist())
+                puntos_pies.append({"x": round((x1 + x2) / 2, 1), "y": round(y2, 1)})
         elif mejor_frame_vacio is None:
             mejor_frame_vacio = frame
     captura.release()
@@ -231,6 +319,7 @@ def _revisar(ruta: Path) -> dict[str, Any]:
     medidas["frames_muestreados"] = len(indices)
     medidas["frames_con_personas"] = con_personas
     medidas["fraccion_con_personas"] = round(fraccion, 3)
+    medidas["puntos_pies"] = puntos_pies
 
     if fraccion < MIN_FRACCION_CON_PERSONAS:
         return {
@@ -294,9 +383,20 @@ def _hilo_procesar(job_id: str, video_id: str, nombre_original: str) -> None:
         "VIDEO_ID": video_id,
         "VIDEO_PATH": f"data/videos/{video_id}.mp4",
         "RENDER_MODE": "privacy",
+        # Sin esto, el HIJO decide por su cuenta si su stdout es una terminal
+        # o no -y aqui NUNCA lo es: es la tuberia que este mismo Popen abre
+        # mas abajo (stdout=PIPE)-, asi que usa buffer COMPLETO (varios KB)
+        # en vez de linea por linea. `bufsize=1` de Popen solo afecta como
+        # el PADRE (este proceso) LEE la tuberia; no le dice nada al hijo
+        # sobre como ESCRIBIR. El resultado, real, visto en la practica: el
+        # `for linea in proceso.stdout` de abajo no recibia nada hasta que
+        # el buffer del hijo se llenaba o el proceso terminaba, asi que el
+        # progreso (mas abajo) se quedaba pegado en 10% y saltaba de golpe a
+        # 100% -sin barra de verdad, aunque la cadena si avanzaba por dentro-.
+        "PYTHONUNBUFFERED": "1",
     }
     proceso = subprocess.Popen(
-        [sys.executable, "-m", "gondola", "run"],
+        [sys.executable, "-u", "-m", "gondola", "run"],
         cwd=str(AI_SERVICE_DIR),
         env=entorno,
         stdout=subprocess.PIPE,
@@ -399,7 +499,7 @@ async def subir(
             detail="Hay que aceptar las condiciones de uso y declarar que el video es de una gondola antes de subirlo.",
         )
 
-    video_id = f"subido_{_sanear(file.filename or 'video')}_{datetime.now().strftime('%H%M%S')}"
+    video_id = f"{PREFIJO_VIDEO_SUBIDO}{_sanear(file.filename or 'video')}_{datetime.now().strftime('%H%M%S')}"
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     destino = VIDEOS_DIR / f"{video_id}.mp4"
 

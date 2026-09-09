@@ -64,11 +64,21 @@ estático de `data/output/` (ver el comentario de `RENDER_DIR` en `api.py`)
 La ÚNICA parte de esta API que escribe -por eso vive en su propio módulo,
 ver la sección CORS abajo-. Deja que alguien suba un video sin tocar la
 terminal ni copiar archivos a mano: sube el archivo, el servidor revisa
-que sea apto (abre, dura entre 5 s y 15 min, YOLO encuentra personas),
-la persona dibuja los estantes sobre un fotograma sin gente, y desde ahí
-la API lanza sola la cadena completa (`detect → track → zones → interact →
-metrics`) y la importa. `frontend/index.html` lo usa desde el botón
-"Subir video" del panel principal.
+que sea apto (abre, dura entre 5 s y 15 min, la cámara es fija -ver
+`_fraccion_camara_en_movimiento` en `uploads.py`-, YOLO encuentra
+personas), la persona dibuja los estantes sobre un fotograma sin gente, y
+desde ahí la API lanza sola la cadena completa (`detect → track → zones →
+interact → metrics`) y la importa. `frontend/index.html` lo usa desde el
+botón "Subir video" del panel principal.
+
+El chequeo de cámara fija **no** verifica que la escena sea una góndola
+-YOLO no tiene esa clase entre las 80 de COCO, no hay forma de que un
+detector de objetos genérico sepa distinguir un pasillo de supermercado de
+cualquier otro sitio-, solo descarta video grabado a mano, con paneo, zoom
+o cortes de escena: una cámara de vigilancia que monitorea una góndola no
+se mueve. Que la escena sea de verdad una góndola sigue quedando en manos
+de quien sube el video (`confirma_gondola`, la casilla que hay que marcar
+antes de subir).
 
 | Método y ruta | Qué hace |
 |---|---|
@@ -79,10 +89,23 @@ metrics`) y la importa. `frontend/index.html` lo usa desde el botón
 
 Los trabajos viven en memoria (`uploads._TRABAJOS`): reiniciar la API
 pierde los que estén a medias, a propósito — se usa de a un video por vez,
-no hace falta persistirlo. Necesita `opencv-python` y `ultralytics` (las
-mismas del `ai-service`) solo para el prevuelo; por eso no van en
-`backend/requirements.txt` (ver la nota en ese archivo) y se importan
-dentro de la función que las usa.
+no hace falta persistirlo.
+
+**Paso manual obligatorio para que la subida funcione de verdad:** el
+prevuelo necesita `opencv-python` y `ultralytics` (las mismas del
+`ai-service`), pero a propósito NO están en `backend/requirements.txt`
+(ver la nota en ese archivo) — así que instalar solo eso deja la API
+arrancando bien, sus tests pasando, y la subida rechazando **cualquier**
+video con `No pude revisar el video: No module named 'cv2'`, sin importar
+qué tan buen video sea. Hace falta instalarlas A MANO, en el mismo
+entorno donde corre `uvicorn api:app` (no basta con tenerlas en el
+`.venv` del `ai-service`, es un proceso de Python aparte):
+
+    cd backend
+    .venv\Scripts\python -m pip install opencv-python==5.0.0.93 ultralytics==8.4.129
+
+Solo hace falta en la máquina que vaya a recibir subidas desde el
+dashboard, igual que ya pasa con quien corre el pipeline completo.
 
 ## Configuración (`backend/.env`)
 
@@ -118,7 +141,16 @@ Shopping Dataset** (`video_demo_merl_24_3`, `_15_3`, `_39_1`, `_18_3`,
 `_36_1` — mismo prefijo `video_demo_` que los datos de prueba del
 dashboard, pero corridos por el pipeline de verdad, no inventados a mano).
 Reutilizan la calibración de cámara de `video_001` porque comparten la
-misma resolución (920×680): ver `data/zones/README.md`.
+misma resolución (920×680): cada uno tiene su propio archivo en
+`data/zones/<video_id>.json`, copia del de `video_001` con el `video_id`
+cambiado -no un solo archivo compartido-, ver `data/zones/README.md`. A
+diferencia de los videos en sí, estos SI están versionados en git (son
+JSON pequeños, no video): sin ellos, volver a correr la cadena completa
+sobre estos clips falla en la etapa `zones` pidiendo un archivo que no
+existe -bug real, encontrado en la práctica: los cinco clips MERL se
+importaron alguna vez con estos archivos, pero nunca se subieron a git,
+así que un clon nuevo (o volver a correr el pipeline en la misma máquina,
+tras borrar `data/zones/`) no podía reproducirlos-.
 
 **Esto vive SOLO en la máquina donde se corrió el pipeline, no en git.**
 Estos seis videos quedaron importados en el volumen de Docker de Postgres

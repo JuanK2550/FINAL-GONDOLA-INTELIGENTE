@@ -47,6 +47,21 @@ FRAMES_ENTRE_AVISOS = 25
 """Cada cuantos frames se informa del progreso. En CPU esto tarda y hay que
 saber que el proceso no se colgo."""
 
+TAMANO_LOTE = 3
+"""Frames que se le pasan a YOLO de una sola vez, en vez de uno por uno.
+
+Medido en CPU sobre video real (12th Gen Intel Core i5, sin GPU): de a un
+frame, ~8.2 fps; en lotes de 3, ~9.4 fps -unas 15% mas rapido-, con
+EXACTAMENTE las mismas detecciones (mismo modelo, mismos umbrales, ninguna
+perdida de calidad: es solo cuantas veces se llama a predict(), no que se
+le pida menos trabajo). Lotes mas grandes (4, 6, 8) no siguieron mejorando
+-e incluso empeoraron un poco- en esta maquina: yolo11n es un modelo tan
+chico que, pasado cierto punto, el overhead de Python por frame deja de
+ser el cuello de botella y agrandar el lote ya no ayuda. No se toco imgsz
+(640 por defecto) para ganar velocidad: se probo y perdia hasta el 38% de
+las detecciones reales en video con gente -inaceptable para lo que este
+sistema mide-, ver el commit que agrego este comentario."""
+
 
 @dataclass(frozen=True)
 class DeteccionCruda:
@@ -204,8 +219,28 @@ def _cargar_modelo(cfg: Config):
     return modelo, ids
 
 
-def _detectar_en_frame(modelo, frame, ids_persona: list[int], cfg: Config) -> Iterator[DeteccionCruda]:
-    """Pasa un frame por el modelo y entrega sus detecciones en crudo.
+def _en_lotes(iterable, tamano: int):
+    """Agrupa `iterable` en listas de a `tamano` elementos (la ultima puede
+    quedar mas corta). Generador puro, sin YOLO ni video: solo agrupa, no
+    consume el iterable de origen mas alla de lo que necesita para llenar
+    UN lote a la vez -sigue sin cargar el video completo en memoria."""
+    lote = []
+    for item in iterable:
+        lote.append(item)
+        if len(lote) == tamano:
+            yield lote
+            lote = []
+    if lote:
+        yield lote
+
+
+def _detectar_en_lote(
+    modelo, frames: list, ids_persona: list[int], cfg: Config
+) -> Iterator[list[DeteccionCruda]]:
+    """Pasa un LOTE de frames al modelo de una sola vez y entrega las
+    detecciones en crudo de CADA frame por separado, en el mismo orden que
+    `frames` -mas rapido en CPU que llamar a predict() una vez por frame,
+    ver TAMANO_LOTE-.
 
     `classes=ids_persona` hace que el propio modelo descarte todo lo que no sea
     una persona. Es mucho mas rapido que filtrarlo despues, y ademas significa
@@ -213,7 +248,7 @@ def _detectar_en_frame(modelo, frame, ids_persona: list[int], cfg: Config) -> It
     memoria.
     """
     resultados = modelo.predict(
-        frame,
+        frames,
         classes=ids_persona,
         conf=cfg.confidence_threshold,
         iou=cfg.iou_threshold,
@@ -222,51 +257,60 @@ def _detectar_en_frame(modelo, frame, ids_persona: list[int], cfg: Config) -> It
         verbose=False,
     )
     for resultado in resultados:
+        crudas = []
         for caja in resultado.boxes:
             class_id = int(caja.cls.item())
-            yield DeteccionCruda(
+            crudas.append(DeteccionCruda(
                 class_id=class_id,
                 class_name=str(modelo.names.get(class_id, "")),
                 confidence=float(caja.conf.item()),
                 xyxy=tuple(float(v) for v in caja.xyxy[0].tolist()),
-            )
+            ))
+        yield crudas
 
 
 def _eventos_del_video(
     modelo, ids_persona: list[int], video, cfg: Config,
     resumen: Resumen, renderer,
 ) -> Iterator[Event]:
-    """Recorre el video y entrega los eventos de a uno, sin acumularlos.
+    """Recorre el video EN LOTES de `TAMANO_LOTE` frames (una sola llamada a
+    YOLO por lote, ver _detectar_en_lote) y entrega los eventos de a uno, sin
+    acumular mas que un lote a la vez.
 
     Es un generador para que `write_events` los vaya escribiendo segun salen:
     un video de 10 minutos puede dar mas de 50.000 eventos.
     """
     info = video.info
-    for indice, timestamp, frame in video.frames(cfg.frame_stride, cfg.max_frames):
-        eventos_del_frame = []
-        for cruda in _detectar_en_frame(modelo, frame, ids_persona, cfg):
-            evento = construir_evento(
-                cruda, cfg.video_id, indice, timestamp, info.width, info.height
-            )
-            if evento is None:
-                if cruda.class_name.lower() != CLASE_PERSONA:
-                    resumen.descartadas_por_clase += 1
-                else:
-                    resumen.descartadas_por_caja += 1
-                continue
-            eventos_del_frame.append(evento)
+    frames_del_video = video.frames(cfg.frame_stride, cfg.max_frames)
+    for lote in _en_lotes(frames_del_video, TAMANO_LOTE):
+        imagenes_del_lote = [frame for _, _, frame in lote]
+        detecciones_del_lote = _detectar_en_lote(modelo, imagenes_del_lote, ids_persona, cfg)
 
-        resumen.frames_procesados += 1
-        resumen.detecciones_totales += len(eventos_del_frame)
-        if eventos_del_frame:
-            resumen.frames_con_personas += 1
+        for (indice, timestamp, frame), crudas in zip(lote, detecciones_del_lote):
+            eventos_del_frame = []
+            for cruda in crudas:
+                evento = construir_evento(
+                    cruda, cfg.video_id, indice, timestamp, info.width, info.height
+                )
+                if evento is None:
+                    if cruda.class_name.lower() != CLASE_PERSONA:
+                        resumen.descartadas_por_clase += 1
+                    else:
+                        resumen.descartadas_por_caja += 1
+                    continue
+                eventos_del_frame.append(evento)
 
-        renderer.write(frame, eventos_del_frame, indice, timestamp)
+            resumen.frames_procesados += 1
+            resumen.detecciones_totales += len(eventos_del_frame)
+            if eventos_del_frame:
+                resumen.frames_con_personas += 1
 
-        if resumen.frames_procesados % FRAMES_ENTRE_AVISOS == 0:
-            _avisar_progreso(resumen, indice, info)
+            renderer.write(frame, eventos_del_frame, indice, timestamp)
 
-        yield from eventos_del_frame
+            if resumen.frames_procesados % FRAMES_ENTRE_AVISOS == 0:
+                _avisar_progreso(resumen, indice, info)
+
+            yield from eventos_del_frame
 
 
 def _avisar_progreso(resumen: Resumen, indice: int, info) -> None:
@@ -326,10 +370,32 @@ def run(cfg: Config, abrir_video: bool = False) -> int:
             )
         transcurrido = time.perf_counter() - inicio
 
+        # frame_count_video/duration_s_video se leen DESPUES de recorrer el
+        # video entero, no de video.info (el encabezado del contenedor,
+        # leido antes de decodificar nada). Bug real, visto con video de
+        # celular subido de verdad: el encabezado decia 3657 frames, el
+        # archivo de verdad tenia 3780 -4 s de diferencia entre la duracion
+        # que mostraba el dashboard y la duracion real del reproductor-. Ver
+        # el docstring de VideoReader.frames_reales_vistos.
+        #
+        # Solo se confia en el conteo real cuando MAX_FRAMES no corto la
+        # pasada antes de tiempo (el valor de produccion, 0 = sin limite):
+        # con un limite puesto, `frames_reales_vistos` refleja donde se
+        # detuvo el corte, no donde termina el video de verdad, y usarlo
+        # igual pisaria la duracion real con la del corte -exactamente el
+        # bug que ya paso una vez benchmarkeando con MAX_FRAMES=600-.
+        frame_count_video = (
+            video.frames_reales_vistos
+            if cfg.max_frames == 0 and video.frames_reales_vistos > 0
+            else video.info.frame_count
+        )
+        duration_s_video = frame_count_video / fps_video if fps_video > 0 else 0.0
+
     fps_procesamiento = resumen.frames_procesados / transcurrido if transcurrido > 0 else 0.0
     ruta_resumen = pipeline.summary_path("detect", cfg)
     _escribir_resumen(ruta_resumen, cfg, resumen, fps_procesamiento, transcurrido,
-                      nombre_modelo, dimensiones, fps_video)
+                      nombre_modelo, dimensiones, fps_video, frame_count_video,
+                      duration_s_video)
 
     _imprimir_resultado(resumen, escritos, transcurrido, fps_procesamiento, cfg,
                         rutas.output_path, ruta_resumen, video_salida)
@@ -343,8 +409,28 @@ def run(cfg: Config, abrir_video: bool = False) -> int:
 def _escribir_resumen(destino: Path, cfg: Config, resumen: Resumen,
                       fps_procesamiento: float, transcurrido: float,
                       nombre_modelo: str, dimensiones: tuple[int, int],
-                      fps_video: float) -> None:
-    """Guarda las metricas de la corrida. Sin esto no se puede comparar nada."""
+                      fps_video: float, frame_count_video: int,
+                      duration_s_video: float) -> None:
+    """Guarda las metricas de la corrida. Sin esto no se puede comparar nada.
+
+    `frame_count`/`duration_s` son los del VIDEO COMPLETO, no de cuantos
+    frames se procesaron (`results.frames_procesados`, que puede ser menor
+    por `FRAME_STRIDE`/`MAX_FRAMES`) ni de donde hubo detecciones: el
+    importador del backend (Persona 7) los prefiere sobre inferirlos del
+    ultimo evento del .jsonl, que salia corto cuando el video terminaba con
+    el pasillo vacio -bug real, encontrado en la practica-.
+
+    OJO: "el video completo" ya NO significa `VideoReader.info` (el
+    encabezado del contenedor, via `cv2.CAP_PROP_FRAME_COUNT`, leido ANTES
+    de decodificar nada) -ese numero puede estar mal, sobre todo en video
+    de celular/WhatsApp reencodeado, y cuando lo esta la duracion que
+    muestra el dashboard no coincide con la del reproductor real (bug real,
+    visto en la practica: encabezado 3657 frames, video de verdad 3780).
+    Quien llama (`comando_run`/`comando_etapa`) ya recorrio el video entero
+    para cuando llega aqui, asi que pasa el conteo REAL observado
+    (`VideoReader.frames_reales_vistos`) en su lugar, y solo cae de vuelta
+    al encabezado si `MAX_FRAMES` corto la pasada antes de tiempo.
+    """
     promedio = (
         resumen.detecciones_totales / resumen.frames_procesados
         if resumen.frames_procesados else 0.0
@@ -360,6 +446,8 @@ def _escribir_resumen(destino: Path, cfg: Config, resumen: Resumen,
             "width": dimensiones[0],
             "height": dimensiones[1],
             "fps": round(fps_video, 4),
+            "frame_count": frame_count_video,
+            "duration_s": round(duration_s_video, 3),
         },
         "model": nombre_modelo,
         "params": {
