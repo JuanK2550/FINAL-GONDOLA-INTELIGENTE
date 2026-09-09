@@ -6,6 +6,23 @@
 let hasAnimatedIn = false;
 let lastCountedVideoId = null;
 
+// Que apartados del panel (resumen/zonas/mapa/reportes, ver SECCIONES_PANEL
+// en vista-panel.js) ya mostraron su entrada escalonada al menos una vez.
+// hasAnimatedIn de arriba solo cubre el <main> entero en el primer render de
+// la sesion -y con el panel repartido en pestanas, esa primera vez casi
+// siempre te encuentra parado en 'resumen': las demas pestanas nunca llegan
+// a VERSE en ese instante (estan en display:none), asi que su animacion
+// pasaba de largo sin que nadie la viera. Aqui se guarda, por separado, la
+// primera vez que CADA pestana se vuelve la activa -asi entra escalonada
+// la primera vez que entras a 'zonas', y otra vez la primera vez que entras
+// a 'mapa', aunque sea en la misma sesion-. Igual que hasAnimatedIn, cambiar
+// de video NO la repite (ver el comentario de firstPaint mas abajo): eso lo
+// comunican el conteo de las cifras y el crecimiento de las barras.
+const seccionesAnimadas = new Set();
+function debeAnimarSeccion(id) {
+  return !seccionesAnimadas.has(id) && !!state.videoDetail;
+}
+
 function render() {
   const root = document.getElementById('root');
   // La clase vive en <html>, no en #root: #root se reconstruye entero en
@@ -69,7 +86,7 @@ function render() {
           <h3 class="text-sm font-semibold text-[#2F3437]">Este video no tiene render anonimizado</h3>
           <p class="text-xs text-[#787774] mt-1 max-w-md mx-auto">Los videos de prueba no tienen ninguna grabación detrás. En un video real aparece aquí el render en modo privacidad, sin un solo píxel del original.</p>
         </div>`)}
-      ${seccionPanel('reportes', renderFeedback() || `
+      ${seccionPanel('reportes', renderFeedback(undefined, 'reportes') || `
         <div class="bg-white rounded-xl border border-dashed border-[#D6D3D1] py-16 text-center">
           ${icon('check-circle-2', 'w-8 h-8 text-[#346538] mx-auto mb-3')}
           <h3 class="text-sm font-semibold text-[#2F3437]">Sin advertencias para este video</h3>
@@ -103,6 +120,22 @@ function render() {
   `;
 
   if (firstPaint) hasAnimatedIn = true;
+  // No se marca AQUI mismo, de forma sincrona: al elegir un video, el
+  // detalle/metricas/zonas/posiciones llegan de fetch() separados que en
+  // localhost pueden resolver a milisegundos uno del otro, y cada uno
+  // dispara su propio render(). Si el primero marcaba la seccion al
+  // toque, el SEGUNDO (llegando antes de que el navegador pintara el
+  // primero) ya salia sin stagger-in: el cascade nunca llegaba a
+  // pintarse, solo el resultado ya asentado -bug real, visto con un
+  // MutationObserver, es la razon de que "saliera todo de golpe" pese a
+  // que la clase si se ponia-. Esperar dos frames de animacion antes de
+  // marcar le da tiempo al navegador a pintar con la clase puesta al
+  // menos una vez; cualquier render que llegue mientras tanto la sigue
+  // trayendo tambien, asi que no se pierde nada.
+  if (state.videoDetail) {
+    const seccion = state.panelSeccion;
+    requestAnimationFrame(() => requestAnimationFrame(() => seccionesAnimadas.add(seccion)));
+  }
   fillCountUps();
 
   // Tailwind (CDN) inyecta el CSS de las clases nuevas de forma asincrona
@@ -115,10 +148,10 @@ function render() {
   // haya pintado con los estilos puestos antes de medir nada.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (state.mostrandoComparacion) {
-      pintarMapaAunqueOculto('positions-heatmap-canvas-a', state.compareAPositions);
-      pintarMapaAunqueOculto('positions-heatmap-canvas-b', state.compareBPositions);
+      pintarMapaAunqueOculto('positions-heatmap-canvas-a', state.compareAPositions, state.compareAZonesGeometry);
+      pintarMapaAunqueOculto('positions-heatmap-canvas-b', state.compareBPositions, state.compareBZonesGeometry);
     } else {
-      pintarMapaAunqueOculto('positions-heatmap-canvas', state.positions);
+      pintarMapaAunqueOculto('positions-heatmap-canvas', state.positions, state.zonesGeometry);
     }
     initVideoPlayer();
     initLienzoZonas();
@@ -156,10 +189,10 @@ function exportarReportePDF() {
   document.body.classList.add('destapar-secciones');
   void document.body.offsetHeight;   // fuerza el recalculo antes de medir
   if (state.mostrandoComparacion) {
-    pintarHeatmap('positions-heatmap-canvas-a', state.compareAPositions);
-    pintarHeatmap('positions-heatmap-canvas-b', state.compareBPositions);
+    pintarHeatmap('positions-heatmap-canvas-a', state.compareAPositions, state.compareAZonesGeometry);
+    pintarHeatmap('positions-heatmap-canvas-b', state.compareBPositions, state.compareBZonesGeometry);
   } else {
-    pintarHeatmap('positions-heatmap-canvas', state.positions);
+    pintarHeatmap('positions-heatmap-canvas', state.positions, state.zonesGeometry);
   }
   try {
     window.print();
@@ -169,13 +202,13 @@ function exportarReportePDF() {
   }
 }
 
-function pintarMapaAunqueOculto(containerId, positions) {
+function pintarMapaAunqueOculto(containerId, positions, zonesGeometry) {
   const cont = document.getElementById(containerId);
   if (!cont) return;
   const seccion = cont.closest('.panel-seccion');
   const oculta = seccion && !seccion.classList.contains('activa');
   if (oculta) seccion.style.display = 'block';
-  pintarHeatmap(containerId, positions);
+  pintarHeatmap(containerId, positions, zonesGeometry);
   if (oculta) seccion.style.display = '';
 }
 

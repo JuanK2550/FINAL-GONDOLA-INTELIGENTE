@@ -53,3 +53,8 @@ data/output/*
 *.tmp
 *.bak
 tmp/
+
+# --- Herramientas locales del editor ---
+# Instalados con `npx skills add ...`; cada quien los tiene o no en su
+# maquina, no son codigo de Gondola Inteligente.
+skills-lock.json

@@ -21,18 +21,23 @@ function renderSummaryCards(bundle = bundleDe(), idPrefix = '') {
   const putBackProgress = d.pick_up_count > 0 ? Math.min(100, Math.round((d.put_back_count / d.pick_up_count) * 100)) : 0;
   const dwellProgress = Math.min(100, Math.round(((d.average_dwell_time_s || 0) / 20) * 100));
   const mid = (nombre) => idPrefix ? `metric-${idPrefix}-${nombre}` : `metric-${nombre}`;
+  // Dentro de 'resumen' (sin idPrefix) se anima la primera vez que se
+  // entra a esa pestana en la sesion; dentro de comparar (con idPrefix,
+  // que no tiene pestanas) se anima solo en el primer render de la
+  // sesion, como el resto de esa vista. Ver debeAnimarSeccion() en app.js.
+  const entra = idPrefix ? (!hasAnimatedIn ? 'stagger-in' : '') : (debeAnimarSeccion('resumen') ? 'stagger-in' : '');
 
   return `
   <section aria-labelledby="kpi-summary-heading${idPrefix}" class="space-y-2">
     <div class="flex items-center justify-between px-1">
       <h2 id="kpi-summary-heading${idPrefix}" class="text-[10px] font-bold text-[#787774] uppercase tracking-[0.1em]">Resumen General del Video</h2>
-      <span class="text-[11px] text-[#787774]">Grabación: <code class="font-mono text-[#111111]">${esc(d.video_id)}</code></span>
+      <span class="text-[11px] text-[#787774]">Grabación: <code class="font-mono text-[#111111]">${esc(d.source_name || d.video_id)}</code></span>
     </div>
     <!-- En la vista de comparacion cada columna ocupa media pantalla: seis
          tarjetas ahi dejaban ~110px por tarjeta y los titulos se partian
          ("PICK-/UPS", "TASA / RECHAZO") con los subtextos cortados. Con
          idPrefix (o sea, dentro de comparar) se baja a 2-3 columnas. -->
-    <div class="kpi-grid grid gap-3 sm:gap-4 ${idPrefix ? 'grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'}">
+    <div class="kpi-grid ${entra} grid gap-3 sm:gap-4 ${idPrefix ? 'grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'}">
       ${metricCard({ id: mid('people-count'), icono: 'users-three', title: 'Tráfico Total', value: formatNumber(d.people_count), countTarget: d.people_count, subtext: 'personas detectadas', badge: '100% Anónimo', tone: 'neutral', barColor: '#1F6C9F', progressPercent: d.people_count > 0 ? 65 : 0, tooltip: 'Conteo de identificadores de seguimiento únicos (track_id temporales) detectados en el área del pasillo.' })}
       ${metricCard({ id: mid('interaction-count'), icono: 'chat-circle-dots', title: 'Interacciones', value: formatNumber(d.interaction_count), countTarget: d.interaction_count, subtext: `${interactionRateVal}% rate`, badge: `${d.people_count > 0 ? (d.interaction_count / d.people_count).toFixed(1) : '0'} / pers`, tone: 'info', barColor: '#1F6C9F', progressPercent: interactionRateVal, tooltip: 'Eventos donde un cliente se detuvo dentro de la zona de atención de la góndola.' })}
       ${metricCard({ id: mid('pick-up-count'), icono: 'hand-grabbing', title: 'Pick-ups', value: formatNumber(d.pick_up_count), countTarget: d.pick_up_count, subtext: 'productos tomados', badge: 'Extracción', tone: 'accent', barColor: '#1F6C9F', progressPercent: pickUpProgress, tooltip: 'Veces que la mano de un cliente tomó un producto de la góndola según el modelo de interacción.' })}
@@ -187,7 +192,12 @@ function renderZonesSection(bundle = bundleDe(), idPrefix = '') {
         </div>
       </div>`;
     }).join('');
-    body = `<div class="grid gap-3.5 ${isSingleZone ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}">${cards}</div>`;
+    // debeAnimarSeccion('zonas') (declarada en app.js) hace que esto entre
+    // escalonado la primera vez que se entra a la pestana 'zonas' en la
+    // sesion, y no de nuevo en cada repintado -render() repinta TODO en
+    // cada setState(), hasta al abrir un tooltip de info-. Ver el
+    // comentario junto a esa funcion en app.js.
+    body = `<div class="${debeAnimarSeccion('zonas') ? 'stagger-in' : ''} grid gap-3.5 ${isSingleZone ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}">${cards}</div>`;
   }
 
   return `<section aria-labelledby="zones-heading" class="space-y-3">${header}${body}</section>`;
@@ -301,13 +311,113 @@ const HEATMAP_ESTILOS = {
 // entrada mas abajo).
 const HUELLA_MAPA = {};
 
+// Silueta de la gondola de fondo: un rectangulo por estante (su floor_zone,
+// ver GET /videos/{id}/zones/geometry en backend/api.py) con las mismas dos
+// lineas horizontales de "estante con niveles" que dibuja el render
+// 'privacy' del AI Service sobre el video anonimizado (ver
+// _dibujar_lineas_estante en ai-service/gondola/video/render.py) -mismo
+// color BLANCO (235,235,235) que usa ese modulo, mismos dos tercios de
+// altura para las lineas-. Sin esto los puntos del mapa flotaban sobre un
+// rectangulo negro liso, sin ninguna referencia de a que estante
+// corresponde cada mancha de densidad.
+//
+// SVG, no <canvas>: es una capa fija que no cambia entre frames (a
+// diferencia del mapa de calor, que si repinta), y un SVG se mantiene nitido
+// a cualquier zoom sin recalcular nada a mano -mismo criterio que el resto
+// del dashboard (ver el comentario de renderPantallaInicio en
+// vista-modales.js: HTML/SVG de verdad, no pixeles-.
+//
+// Se agrega DESPUES de heatmap.js (ver pintarHeatmap, mas abajo), no antes:
+// alguien que no conoce el proyecto veia una mancha roja y no tenia forma
+// de saber a que estante correspondia -pedido explicito, "que muestre que
+// parte de la estanteria es"-. El nombre necesita quedar LEGIBLE encima de
+// la mancha, no debajo, y por eso cada etiqueta lleva un chip solido detras
+// del texto (mismo mecanismo que `_dibujar_zonas` en
+// ai-service/gondola/video/render.py: un rectangulo de color solido antes
+// del texto, no texto suelto sobre lo que sea que haya debajo).
+function _dibujarSiluetaGondola(container, geometry) {
+  if (!geometry || !geometry.shelves || !geometry.shelves.length) return;
+  if (!geometry.frame_width || !geometry.frame_height) return;
+  const scaleX = container.clientWidth / geometry.frame_width;
+  const scaleY = container.clientHeight / geometry.frame_height;
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class', 'absolute inset-0 w-full h-full');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.style.pointerEvents = 'none';
+
+  // Los chips (fondo + texto) se miden y posicionan DESPUES de insertar el
+  // <svg> en el DOM (mas abajo): un <text> sin insertar mide 0 de ancho con
+  // getBBox, igual que cv2.getTextSize necesita una fuente ya cargada.
+  const etiquetas = [];
+
+  geometry.shelves.forEach((s) => {
+    const x = s.x * scaleX, y = s.y * scaleY, w = s.width * scaleX, h = s.height * scaleY;
+
+    const rect = document.createElementNS(svgNS, 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('fill', 'none');
+    rect.setAttribute('stroke', 'rgba(235,235,235,0.65)');
+    rect.setAttribute('stroke-width', '1.5');
+    rect.setAttribute('rx', '2');
+    svg.appendChild(rect);
+
+    [1, 2].forEach((i) => {
+      const ly = y + (h * i) / 3;
+      const linea = document.createElementNS(svgNS, 'line');
+      linea.setAttribute('x1', x + 3); linea.setAttribute('x2', x + w - 3);
+      linea.setAttribute('y1', ly); linea.setAttribute('y2', ly);
+      linea.setAttribute('stroke', 'rgba(235,235,235,0.45)');
+      linea.setAttribute('stroke-width', '1');
+      svg.appendChild(linea);
+    });
+
+    const chip = document.createElementNS(svgNS, 'rect');
+    chip.setAttribute('rx', '3');
+    chip.setAttribute('fill', 'rgba(235,235,235,0.95)');
+    svg.appendChild(chip);
+
+    const texto = document.createElementNS(svgNS, 'text');
+    texto.setAttribute('fill', '#111111');
+    texto.setAttribute('font-size', '11');
+    texto.setAttribute('font-weight', '700');
+    texto.setAttribute('font-family', 'var(--font-ui, system-ui), sans-serif');
+    texto.textContent = s.name;
+    svg.appendChild(texto);
+
+    etiquetas.push({ shelfX: x, shelfY: y, chip, texto });
+  });
+
+  container.appendChild(svg);
+
+  // Igual que `lx = max(0, min(x1, self.ancho - ancho_txt - 8))` en
+  // render.py: sin este recorte, un estante calibrado pegado al borde
+  // derecho dejaba la etiqueta cortada fuera del lienzo.
+  etiquetas.forEach(({ shelfX, shelfY, chip, texto }) => {
+    const caja = texto.getBBox();
+    const padX = 5, padY = 3;
+    const chipW = caja.width + padX * 2;
+    const chipH = caja.height + padY * 2;
+    const chipX = Math.max(0, Math.min(shelfX + 4, container.clientWidth - chipW));
+    const chipY = shelfY + 4;
+    chip.setAttribute('x', chipX); chip.setAttribute('y', chipY);
+    chip.setAttribute('width', chipW); chip.setAttribute('height', chipH);
+    texto.setAttribute('x', chipX + padX);
+    texto.setAttribute('y', chipY + chipH - padY - 1.5);
+  });
+}
+
 // Pinta heatmap.js dentro de #<containerId>. Se llama despues de cada
 // render() (ver app.js), nunca durante: heatmap.js necesita medir el
 // contenedor ya insertado en el DOM (container.clientWidth) para saber a
 // que escala de pixeles pintar. Recibe `positions` aparte (no state
 // directamente) para poder pintar el mapa de CUALQUIER video -el
 // principal o los de la comparacion-, cada uno en su propio contenedor.
-function pintarHeatmap(containerId, positions) {
+// `zonesGeometry` es opcional: sin calibracion de zonas en disco (ver
+// loadZonesGeometry en estado.js) el mapa se pinta igual, solo sin la
+// silueta de fondo.
+function pintarHeatmap(containerId, positions, zonesGeometry) {
   const container = document.getElementById(containerId);
   if (!container || typeof h337 === 'undefined') return;
   const frameWidth = Number(container.dataset.frameWidth);
@@ -347,6 +457,12 @@ function pintarHeatmap(containerId, positions) {
   });
   const max = Math.max(1, ...data.map((d) => d.value));
   heatmap.setData({ max, data });
+
+  // Encima del canvas de heatmap.js (se agrega DESPUES, no antes): la
+  // silueta y sus etiquetas tienen que quedar legibles aunque el punto mas
+  // caliente del mapa caiga justo ahi -ver el docstring de
+  // _dibujarSiluetaGondola, mas arriba-.
+  _dibujarSiluetaGondola(container, zonesGeometry);
 
   // Barrido de izquierda a derecha al pintar, con clip-path (no toca el
   // diseno, asi que el navegador lo resuelve sin recalcular nada). Se
@@ -482,7 +598,7 @@ function renderZonesHeatmap(bundle = bundleDe()) {
           <span>Menos</span><div class="w-24 h-2 rounded shrink-0" style="background:linear-gradient(90deg,#D6E8F5,#5D9BC9,#0B3B5C)"></div><span>Más</span>
         </div>
       </div>
-      <div class="grid gap-3.5 mt-3 ${gondolas.length > 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}">${gondolas.map(gondolaCard).join('')}</div>
+      <div class="${debeAnimarSeccion('zonas') ? 'stagger-in' : ''} grid gap-3.5 mt-3 ${gondolas.length > 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}">${gondolas.map(gondolaCard).join('')}</div>
     </div>
     ${renderRanking()}
   </div>`;
@@ -589,7 +705,7 @@ function renderInsights(bundle = bundleDe()) {
         ${icon('trending-up', 'w-3.5 h-3.5 text-[#1F6C9F]')}<span>Telemetría de video anónima</span>
       </div>
     </div>
-    <div class="grid grid-cols-1 gap-3">${cards}</div>
+    <div class="${debeAnimarSeccion('resumen') ? 'stagger-in' : ''} grid grid-cols-1 gap-3">${cards}</div>
   </div>`;
 }
 

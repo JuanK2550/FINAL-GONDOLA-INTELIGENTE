@@ -60,6 +60,8 @@ const state = {
   isLoadingHierarchy: false,
   positions: [],                   // filas de GET /videos/{id}/positions ({x,y} en pixeles del frame)
   isLoadingPositions: false,
+  zonesGeometry: null,             // GET /videos/{id}/zones/geometry ({frame_width, frame_height, shelves})
+  isLoadingZonesGeometry: false,
   // Comparacion: apartado APARTE del panel principal (ver
   // renderComparisonView, en vista-comparar.js), no una tarjeta mas de la
   // pantalla de un solo video. Mezclar los dos causaba un bug real de
@@ -82,10 +84,12 @@ const state = {
   compareAMetrics: [], isLoadingCompareAMetrics: false,
   compareAHierarchy: [], isLoadingCompareAHierarchy: false,
   compareAPositions: [], isLoadingCompareAPositions: false,
+  compareAZonesGeometry: null, isLoadingCompareAZonesGeometry: false,
   compareB: '', compareBDetail: null, isLoadingCompareB: false,
   compareBMetrics: [], isLoadingCompareBMetrics: false,
   compareBHierarchy: [], isLoadingCompareBHierarchy: false,
   compareBPositions: [], isLoadingCompareBPositions: false,
+  compareBZonesGeometry: null, isLoadingCompareBZonesGeometry: false,
   subida: SUBIDA_VACIA(),
   isLoadingVideos: false,
   isLoadingDetail: false,
@@ -126,10 +130,26 @@ async function verifyHealth() {
   }
 }
 
+// El backend devuelve /videos en el orden en que quedaron en la tabla (el
+// de importacion/subida), no en un orden que tenga sentido para elegir de
+// un desplegable. Primero los videos curados ("Gondola 1".."Gondola 6"),
+// en orden NATURAL (numeric:true: "Gondola 2" antes que "Gondola 10", no
+// como texto plano donde "10" < "2"); despues los que no siguen ese
+// patron -videos subidos, con el nombre que les puso quien los subio-,
+// alfabeticamente.
+function compararVideos(a, b) {
+  const nombreA = a.source_name || a.video_id;
+  const nombreB = b.source_name || b.video_id;
+  const esGondolaA = /^Gondola \d+/.test(nombreA);
+  const esGondolaB = /^Gondola \d+/.test(nombreB);
+  if (esGondolaA !== esGondolaB) return esGondolaA ? -1 : 1;
+  return nombreA.localeCompare(nombreB, 'es', { numeric: true, sensitivity: 'base' });
+}
+
 async function loadVideos() {
   setState({ isLoadingVideos: true, errorVideos: null });
   try {
-    const data = await getVideos(state.apiBaseUrl, state.useMockMode);
+    const data = (await getVideos(state.apiBaseUrl, state.useMockMode)).sort(compararVideos);
     const exists = data.some((v) => v.video_id === state.selectedVideoId);
     // Sin auto-elegir el primero: si el video que ya estaba elegido sigue
     // existiendo, se queda; si no (o si nunca se habia elegido ninguno),
@@ -146,6 +166,7 @@ async function loadVideos() {
       loadVideoMetrics(state.selectedVideoId);
       loadZoneHierarchy(state.selectedVideoId);
       loadPositions(state.selectedVideoId);
+      loadZonesGeometry(state.selectedVideoId);
     }
   } catch (err) {
     setState({ errorVideos: err.message || 'Error de red al conectar con GET /videos', isLoadingVideos: false });
@@ -208,6 +229,26 @@ async function loadPositions(videoId) {
   }
 }
 
+// La calibracion de camara (el area de piso de cada estante, ver GET
+// /videos/{id}/zones/geometry en backend/api.py): lo que el mapa de calor
+// real usa para dibujar de fondo la silueta de la gondola -mismo
+// pictograma que el render 'privacy' del AI Service-, para que los puntos
+// de densidad de loadPositions() tengan una referencia de a que estante
+// corresponden. `null` (no `[]`) cuando no hay: distingue "todavia no
+// contesto la API" de "este video no tiene calibracion en disco".
+async function loadZonesGeometry(videoId) {
+  if (!videoId) return;
+  setState({ isLoadingZonesGeometry: true });
+  try {
+    const geometry = state.useMockMode
+      ? MOCK_ZONES_GEOMETRY[videoId] || null
+      : await fetchFromApi(`${cleanBaseUrl(state.apiBaseUrl)}/videos/${encodeURIComponent(videoId)}/zones/geometry`);
+    setState({ zonesGeometry: geometry, isLoadingZonesGeometry: false });
+  } catch {
+    setState({ zonesGeometry: null, isLoadingZonesGeometry: false });
+  }
+}
+
 // Trae el PAQUETE COMPLETO (detalle + metricas + jerarquia de zonas +
 // posiciones) de un video para la vista de comparacion (ver
 // renderComparisonView, en vista-comparar.js) -el mismo paquete que trae
@@ -221,7 +262,7 @@ async function loadCompareData(slot, videoId) {
   if (!videoId) {
     setState({
       [k('')]: '', [k('Detail')]: null,
-      [k('Metrics')]: [], [k('Hierarchy')]: [], [k('Positions')]: [],
+      [k('Metrics')]: [], [k('Hierarchy')]: [], [k('Positions')]: [], [k('ZonesGeometry')]: null,
     });
     return;
   }
@@ -260,6 +301,16 @@ async function loadCompareData(slot, videoId) {
   } catch {
     setState({ [k('Positions')]: [], [`isLoadingCompare${slot}Positions`]: false });
   }
+
+  setState({ [`isLoadingCompare${slot}ZonesGeometry`]: true });
+  try {
+    const geometry = state.useMockMode
+      ? MOCK_ZONES_GEOMETRY[videoId] || null
+      : await fetchFromApi(`${cleanBaseUrl(state.apiBaseUrl)}/videos/${encodeURIComponent(videoId)}/zones/geometry`);
+    setState({ [k('ZonesGeometry')]: geometry, [`isLoadingCompare${slot}ZonesGeometry`]: false });
+  } catch {
+    setState({ [k('ZonesGeometry')]: null, [`isLoadingCompare${slot}ZonesGeometry`]: false });
+  }
 }
 
 // Cuando se elige un video nuevo en el selector principal, se piden sus
@@ -271,6 +322,7 @@ function selectVideo(videoId) {
   loadVideoMetrics(videoId);
   loadZoneHierarchy(videoId);
   loadPositions(videoId);
+  loadZonesGeometry(videoId);
 }
 
 function toggleMockMode(enabled) {
