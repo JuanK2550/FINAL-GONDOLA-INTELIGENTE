@@ -1,116 +1,65 @@
 """Etapa 3: zonas y permanencia. Responsable: Persona 4.
 
-QUE HACE
---------
-Lee los eventos ya seguidos de la Persona 3 (`<video>.track.jsonl`, con
-`track_id` relleno) y, para cada uno, calcula el `support_point` de su caja
-(los pies) y decide en que `floor_zone` del archivo de calibracion cae. Si
-cae en una, rellena `zone.zone_id` y `zone.segment`; si no cae en ninguna
--estaba en el pasillo, entre gondolas-, `zone` se queda en null: es un
-resultado correcto, no un error, y sigue sirviendo para medir flujo. Ademas
-acumula `metrics.dwell_time`. Ningun otro campo del contrato se toca; la
-clasificacion "se detiene"/"pasa de largo" (ver CASO 3 abajo) solo se cuenta
-para el resumen de la corrida, no se escribe en el evento.
+Lee `<video>.track.jsonl`, calcula el `support_point` de cada caja (los
+pies) y decide en que `floor_zone` cae. Rellena `zone` y
+`metrics.dwell_time`; nada mas. Caer fuera de toda zona -el pasillo, entre
+gondolas- deja `zone` en null: es un resultado correcto, no un error.
 
-DE DONDE SALE EL ARCHIVO DE ZONAS
-------------------------------------
-`gondola/zones_config.py` (Fase 1) define el formato y lo valida
-(`ZonesConfig`, `load_zones_config`). Esta etapa lo busca en
-`data/zones/<video_id>.json` (ver `_ruta_zonas`). Si no existe, el mensaje
-dice que copiar (`data/zones/video_001.example.json`) y ajustar -exactamente
-el mismo patron que `eval` usa con `data/groundtruth/<video_id>.csv` y su
-`ejemplo.csv`.
+El archivo de calibracion se busca en `data/zones/<video_id>.json` y lo
+valida `gondola/zones_config.py`. Formato: `docs/zones-format.md`.
 
-`ZONES_PATH` en `.env` / `gondola/config.py` queda pendiente a proposito:
-esta fase solo puede tocar `gondola/stages/`, y esa ruta hoy es la unica
-convencion fija que no depende de ningun archivo fuera de esa carpeta.
+POR QUE LOS PIES Y NO EL CENTRO DE LA CAJA
+-------------------------------------------
+Las zonas son rectangulos de PISO, asi que hay que compararlas contra un
+punto que tambien este en el piso. El centro de la caja flota a la altura
+del pecho: dos personas pisando el mismo sitio, una alta y otra baja, dan
+centros a alturas distintas. Los pies no tienen ese problema.
 
-QUE ES support_point Y POR QUE SE USA EN VEZ DEL CENTRO DE LA CAJA
------------------------------------------------------------------
-`bbox.support_point` (definido en `gondola/contract.py`, Fase 1) es el centro
-del borde INFERIOR de la caja -donde los pies tocan el piso-, no el centro
-geometrico de la caja completa. Las zonas de este archivo son rectangulos de
-PISO (`floor_zone`, ver `gondola/zones_config.py`), asi que solo tiene
-sentido compararlas contra un punto que tambien este en el piso. El centro de
-la caja "flota" a la altura del pecho: dos personas a la misma distancia de
-la gondola, una alta y otra baja, o una de pie y otra agachada, dan centros a
-alturas de pixel distintas aunque pisen exactamente el mismo sitio. Los pies
-no tienen ese problema.
+TRES DECISIONES QUE NO SON OBVIAS
+-----------------------------------
+1. BORDE ENTRE DOS ZONAS. `punto_en_zona` usa intervalo SEMIABIERTO:
+   `[x, x+width)`. Con dos zonas que comparten borde en x=530, el punto
+   x=530 cae siempre en la de la derecha: nunca en las dos (duplicaria a la
+   persona) ni en ninguna (la mandaria al pasillo estando pegada al
+   estante). Misma convencion que el rasterizado 2D.
 
-CASO 1 A DECIDIR: UN PUNTO JUSTO EN EL BORDE ENTRE DOS ZONAS
-------------------------------------------------------------
-`punto_en_zona` usa un intervalo SEMIABIERTO: `[x, x+width)` x `[y,
-y+height)`. Un punto en el borde IZQUIERDO o SUPERIOR de una zona cuenta como
-dentro; en el borde DERECHO o INFERIOR cuenta como fuera. Con dos zonas
-ADYACENTES que comparten borde (ej. `estante_1` termina en x=530 y
-`estante_2` empieza en x=530, como en `data/zones/video_001.example.json`),
-el punto x=530 cae SIEMPRE en `estante_2`: nunca en los dos a la vez (lo que
-duplicaria a la persona en las metricas de ambos estantes) ni en ninguno (lo
-que la mandaria al pasillo estando literalmente pegada a un estante). Es la
-misma convencion que usan casi todas las librerias de rasterizado 2D, y no
-depende de que gondola se calibro primero.
+2. ZONAS QUE SE SOLAPAN. Gana la de MENOR AREA. La mas pequeña es casi
+   siempre la mas especifica -alguien la dibujo pensando en un sitio
+   concreto-; la grande suele ser una zona general que por descuido cubrio
+   de mas. Es determinista y no depende del orden del JSON.
 
-CASO 2 A DECIDIR: DOS ZONAS QUE SE SOLAPAN
---------------------------------------------
-`asignar_zona` le da la zona al candidato con el `floor_zone` de MENOR AREA.
-Motivo: si alguien calibro dos zonas que se superponen (a proposito, para
-acotar un area mas fina dentro de otra mas general, o por error), la mas
-PEQUENA es casi siempre la mas ESPECIFICA -la que alguien dibujo pensando en
-un lugar concreto-, mientras que la mas grande suele ser una zona general que
-por descuido llego a cubrir mas piso del que debia. Es determinista y no
-depende del orden en que se escribieron las gondolas en el JSON. Un empate
-exacto de area (rarisimo, dos zonas identicas superpuestas) se resuelve por
-el orden en que aparecen en el archivo -estable, nunca aleatorio.
+3. "SE DETIENE" vs "PASA DE LARGO". Un solo umbral,
+   `UMBRAL_SE_DETIENE_S=2.0`: cruzar un estante caminando toma bastante
+   menos de un segundo, asi que quien lleva 2 ya freno a mirar. NO esta
+   validado contra groundtruth, y por eso `clasifica_visita` lo recibe como
+   parametro: recalibrarlo no exige tocar la funcion. Clasifica el INSTANTE,
+   no la visita entera -alguien con dwell 1.0 que luego llega a 3.0 sale
+   "pasa_de_largo" ahora y "se_detiene" despues, y es correcto-.
 
-QUE ES metrics.dwell_time AQUI, EXACTO
-------------------------------------------
-Tiempo real (por `timestamp`, NUNCA contando frames ni eventos -el
-`FRAME_STRIDE` de deteccion puede ser mayor que 1, ver
-`docs/tracking-guia-para-zonas.md`) que ese `track_id` lleva CONTINUAMENTE en
-la MISMA zona (mismo `zone_id` + `segment`). En el primer evento de una
-visita nueva vale 0.0. Si el `track_id` cambia de zona, sale de todas, o
-sencillamente ese es su primer evento, la cuenta empieza de nuevo desde 0.0:
-es literal, "cuanto lleva AHORA en ESTA zona", no un acumulado historico de
-todas las visitas que haya hecho. Fuera de cualquier zona (`zone.zone_id` es
-`null`) `dwell_time` tambien se deja en `null`: no hay "segundos en la zona"
-que contar si no hay zona.
+QUE ES dwell_time, EXACTO
+--------------------------
+Tiempo real (por `timestamp`, nunca contando frames: `FRAME_STRIDE` puede
+ser > 1) que ese `track_id` lleva CONTINUAMENTE en la MISMA zona. Empieza
+en 0.0 en cada visita nueva; cambiar de zona reinicia. Fuera de zona es
+`null`. No es un acumulado historico de todas sus visitas.
 
-CASO 3 A DECIDIR: "SE DETIENE" vs "PASA DE LARGO"
----------------------------------------------------
-El campo `dwell_time` es tiempo continuo, no una etiqueta. `clasifica_visita`
-convierte eso en la pregunta que de verdad le importa a un supermercado: si
-alguien PARO frente al estante o solo lo cruzo caminando. La regla es un solo
-umbral, `UMBRAL_SE_DETIENE_S` (2.0 segundos por defecto): `dwell_time >=
-umbral` es "se_detiene", por debajo es "pasa_de_largo", y `None` (fuera de
-zona) sigue siendo `None` -no hay clasificacion de algo que no esta en ningun
-estante.
+EL HUECO: UN track_id PUEDE DESAPARECER Y VOLVER (leelo antes de tocar)
+-----------------------------------------------------------------------
+Desde que `track` recupera identidades (bloque REAPARICION en `track.py`),
+un mismo `track_id` puede tener un hueco de hasta VENTANA_DE_REAPARICION_S
+segundos sin eventos y seguir. Como `dwell_time` es `timestamp -
+visita.entrada` -reloj de pared, no suma de intervalos vistos-, esos
+segundos invisibles CUENTAN como permanencia.
 
-Por que 2.0 s: cruzar el ancho de un estante caminando a paso normal toma
-bien menos de un segundo; alguien que se queda 2 segundos o mas ya freno el
-paso a mirar algo, aunque no haya tomado ningun producto (eso lo decide la
-Persona 5 con `interaction`, es informacion aparte). Es un valor inicial
-razonable, no medido contra groundtruth -no hay groundtruth de esto todavia,
-ver `CLAUDE.md`-, por eso `clasifica_visita` recibe el umbral como parametro
-en vez de tenerlo fijo: quien tenga datos reales para recalibrarlo no
-necesita tocar esta funcion, solo pasar otro numero.
+Es deliberado: para reaparecer, la persona tuvo que volver a menos de
+DISTANCIA_MAXIMA_PARA_REAPARECER pixeles de donde se perdio, o sea que no
+se fue -algo la tapo-. Alguien parado frente al estante sigue estando ahi
+aunque la camara lo pierda medio segundo.
 
-OJO: esto clasifica el momento actual de la visita, no la visita completa.
-Un evento con `dwell_time=1.0` de alguien que dos frames despues llega a
-`dwell_time=3.0` sale como "pasa_de_largo" en ese instante y "se_detiene" mas
-tarde -es correcto: en el frame 1.0 esa persona, en efecto, todavia no se
-habia detenido. Reconstruir "se detuvo en algun momento de su visita" a
-partir de la secuencia completa es trabajo de la etapa de metricas o del
-dashboard (Persona 6), que ya tienen toda la visita en memoria; aqui solo se
-expone el clasificador puro para que lo reutilicen sin reinventarlo.
-
-UNA FRAGILIDAD YA CONOCIDA, HEREDADA DE `track` (no se resuelve aqui)
--------------------------------------------------------------------
-Si un `track_id` se fragmenta por oclusion (Persona 3 lo documenta en
-`docs/tracking-guia-para-zonas.md`), esta etapa ve dos `track_id` distintos
-donde en la realidad hubo una sola persona parada todo el tiempo. Cada
-fragmento arranca su propio `dwell_time` en 0.0. El numero por persona real
-puede quedar subestimado; no hay forma de detectarlo ni corregirlo desde
-aqui, con la informacion que llega de `track.jsonl`.
+Lo que SI queda subestimado es la fragmentacion que el tracker no alcanza a
+recuperar: dos `track_id` donde hubo una persona, cada uno con su dwell
+desde 0.0. Desde aqui no se puede detectar -llega un numero, no una
+persona-.
 """
 
 from __future__ import annotations

@@ -1,23 +1,21 @@
 # data/videos/
 
-## >>> COLOCAR AQUI EL VIDEO DE SCAPDER <<<
+## >>> COLOCAR AQUI LOS VIDEOS <<<
 
 Deja el archivo de video de la tienda en esta carpeta y apunta a el desde tu
 `.env`:
 
-    VIDEO_PATH=data/videos/scapder.mp4
+    VIDEO_PATH=data/videos/video_001.mp4
     VIDEO_ID=video_001
 
 Reglas:
 
 - Los videos **NO se suben a git** (pesan mucho y contienen imagenes de
   personas reales). `.gitignore` los excluye a proposito.
-- `video_001.mp4` (Scapder) no es un video publico: no hay de donde
-  descargarlo solo. Pidelo por el chat de WhatsApp del equipo -asi se
-  reparte hoy-.
-- Los clips del MERL Shopping Dataset SI son publicos (ver mas abajo), pero
-  tambien se pueden pedir por WhatsApp para no tener que descargar el zip
-  completo del dataset solo para cinco clips.
+- Los seis clips (`video_001.mp4`..`video_006.mp4`) salen de la MISMA
+  camara fija en el mismo local: 920x680 a 30 fps, entre 2 y 3,5 minutos
+  cada uno. Por eso comparten una sola calibracion de zonas.
+- No estan en git. Se reparten por el chat de WhatsApp del equipo.
 - **El nombre del archivo NO importa, no hace falta renombrar nada al
   guardarlo.** WhatsApp (o quien te lo mande) le pone el nombre que quiera
   (`VID-20260904-WA0002.mp4`, por ejemplo): si es el UNICO video en esta
@@ -27,9 +25,6 @@ Reglas:
 - `VIDEO_ID` es la etiqueta corta que quedara escrita en cada evento de salida.
   Si trabajas con otro video, cambia tambien el `VIDEO_ID`.
 
-Ademas de `video_001.mp4` (Scapder), aqui tambien viven -por la misma razon,
-no se suben a git- los clips del dataset publico **MERL Shopping Dataset**,
-importados a PostgreSQL como `video_002`..`video_006` (cada uno con su
-propia calibracion de camara, ver `data/zones/README.md`; en algunas
-maquinas quedaron importados antes con el nombre viejo
-`video_demo_merl_24_3`/`_15_3`/`_39_1`/`_18_3`/`_36_1`).
+Los seis se importan a PostgreSQL como `video_001`..`video_006` (ver
+`data/zones/README.md` para su calibracion; en algunas maquinas quedaron
+importados antes con nombres viejos del tipo `video_demo_merl_*`).

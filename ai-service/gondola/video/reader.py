@@ -71,7 +71,7 @@ class VideoReader:
                 f"     (ver data/videos/README.md).\n"
                 f"  2. O pasa la ruta directamente:\n"
                 f"     python -m gondola detect --video ruta/a/tu/video.mp4\n\n"
-                f"Si todavia no tienes el video de Scapder, genera clips de prueba:\n"
+                f"Si todavia no tienes un video, genera clips de prueba:\n"
                 f"     python scripts/make_test_clips.py"
             )
 

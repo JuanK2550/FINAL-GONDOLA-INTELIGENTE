@@ -1,124 +1,69 @@
 """Etapa 2: seguimiento entre frames. Responsable: Persona 3.
 
-QUE HACE
---------
-Lee las detecciones sueltas de la Persona 2 (una caja por persona y por frame,
-sin relacion entre si) y les asigna un `track_id`: el numero que dice "esta
-caja y aquella son la misma silueta". Ningun otro campo se toca.
-
-COMO DECIDE QUE DOS CAJAS SON LA MISMA PERSONA (acordado en la Fase 1 de diseno)
----------------------------------------------------------------------------
-Sin apariencia (prohibida por privacidad, ver docs/data-contract.md) lo unico
-que queda es la geometria: donde estaba, hacia donde se movia, y que tanto se
-solapa con lo que se ve ahora.
-
-Cada track guarda su ultima caja, el instante en que se vio (`timestamp`) y su
-velocidad (px/s, estimada con las dos ultimas posiciones). En cada frame nuevo:
-
-    1. Se PREDICE donde deberia estar cada track activo, extrapolando su
-       velocidad hasta el timestamp del frame actual. Emparejar contra la
-       posicion predicha (no contra la ultima posicion cruda) es lo que
-       distingue a dos personas que se cruzan: aunque sus cajas de este frame
-       se solapen casi del todo, sus predicciones -que vienen de direcciones
-       distintas- no.
-    2. Se EMPAREJA cada prediccion con las cajas del frame. El candidato
-       tiene que solapar por encima de IOU_MINIMO_PARA_EMPAREJAR para ser
-       geometricamente plausible. Entre candidatos cuyo IoU ya es parecido
-       (mismo escalon, NIVEL_IOU_PARA_DESEMPATE), se desempata por
-       `coherencia_de_movimiento`, que favorece al que continua el rumbo que
-       el track ya traia y penaliza al que implicaria una reversa de 180
-       grados en un solo frame. Hace falta, y no es un detalle: en un cruce
-       con direcciones opuestas, el IoU solo puede dar el MISMO valor a las
-       dos cajas del otro lado (un empate real, no redondeo), y sin mas
-       informacion el orden en que YOLO entrego las cajas termina decidiendo
-       por accidente cual identidad se queda con cual. La direccion sí las
-       distingue. Si ningun candidato llega al umbral, no se fuerza: es
-       preferible abrir un track nuevo a intercambiar dos identidades en
-       silencio (un ID switch no da ningun error, solo datos mal atribuidos).
-    3. Un track que no se empareja NO muere de inmediato: sigue "flotando"
-       sobre su prediccion hasta MAX_AGE_S segundos sin ver nada. Esto es lo
-       que le permite sobrevivir a una persona que YOLO dejo de ver un par de
-       frames (confianza inestable) sin creerla otra persona nueva. La
-       prediccion durante ese tiempo no sigue extrapolando la velocidad tal
-       cual: se AMORTIGUA (ver `predecir_bbox`), para que un track viejo
-       converja hacia su ultima posicion conocida en vez de alejarse cada
-       vez mas persiguiendo una velocidad que quiza se estimo con solo dos
-       frames, algo de ruido incluido.
-
-POR QUE MAX_AGE Y LA VELOCIDAD SE MIDEN EN SEGUNDOS Y NO EN FRAMES DEL ARCHIVO
--------------------------------------------------------------------------
-El pipeline puede correr con FRAME_STRIDE > 1: diez lineas seguidas del
-.jsonl pueden ser diez frames reales o cincuenta, segun con que stride corrio
-`detect`. Contar EVENTOS o FRAMES para decidir "hace cuanto se vio" haria que
-la misma tolerancia real cambiara de tamano sin que nadie lo note. Por eso
-todo este modulo trabaja con `evento.timestamp` (segundos reales del video,
-ya calculados por la Persona 2) y nunca con `evento.frame` para nada que
-tenga que ver con tiempo transcurrido. `frame` solo se usa para saber que
-detecciones pertenecen al mismo instante (agruparlas), no para medir tiempo.
+Lee las detecciones sueltas de la Persona 2 y les asigna un `track_id`: el
+numero que dice "esta caja y aquella son la misma silueta". Nada mas se toca.
 
 SIN APARIENCIA, A PROPOSITO
 ----------------------------
-`track_id` sale unicamente de esta geometria: posicion, velocidad y solape.
-Nunca se deriva del contenido de la caja (color, textura, forma de la
-silueta). De hecho esta etapa ni siquiera RECIBE pixeles para decidir el
-seguimiento: lee un .jsonl con cajas y numeros. Eso no es una promesa de buen
-comportamiento, es que la reidentificacion por apariencia es estructuralmente
-imposible con esa entrada. El video solo se reabre, opcionalmente, para
-DIBUJAR el resultado (ver mas abajo); nunca para decidir un track_id.
+La reidentificacion por apariencia esta prohibida por privacidad (ver
+`docs/data-contract.md`), asi que solo queda la geometria: donde estaba,
+hacia donde iba y cuanto se solapa con lo que se ve ahora. Esta etapa ni
+siquiera RECIBE pixeles -lee un .jsonl de cajas y numeros-, asi que no es
+una promesa de buen comportamiento: es estructuralmente imposible. El video
+solo se reabre, opcionalmente, para DIBUJAR.
+
+COMO DECIDE QUE DOS CAJAS SON LA MISMA PERSONA
+-----------------------------------------------
+Cada track guarda su ultima caja, cuando se vio y su velocidad. Por frame:
+
+1. PREDICE donde deberia estar cada track, extrapolando su velocidad. Esto
+   es lo que distingue a dos personas que se cruzan: sus cajas pueden
+   solaparse casi del todo, pero sus predicciones vienen de direcciones
+   distintas. La velocidad se AMORTIGUA con el tiempo perdido (ver
+   `predecir_bbox`): extrapolar varios segundos en linea recta es peor que
+   asumir que sigue cerca de donde estaba.
+
+2. EMPAREJA por IoU, con umbral IOU_MINIMO_PARA_EMPAREJAR. Entre candidatos
+   del mismo escalon de IoU desempata `coherencia_de_movimiento`. Ver el
+   docstring de `emparejar`: el orden importa y hubo un intento peor antes.
+
+3. SEGUNDA OPORTUNIDAD para los que se quedaron sin pareja, por posicion y
+   tamaño en vez de IoU: primero contra los tracks vivos sin emparejar,
+   despues contra el cementerio de perdidos (bloque REAPARICION, mas abajo).
+
+4. Un track sin emparejar NO muere de inmediato: flota sobre su prediccion
+   hasta MAX_AGE_S. Despues pasa al cementerio, y solo tras
+   VENTANA_DE_REAPARICION_S se olvida del todo.
+
+TODO SE MIDE EN SEGUNDOS, NUNCA EN FRAMES DEL ARCHIVO
+-------------------------------------------------------
+Con FRAME_STRIDE > 1, diez lineas seguidas del .jsonl pueden ser diez frames
+reales o cincuenta. Contar eventos para decidir "hace cuanto se vio" haria
+que la misma tolerancia real cambiara de tamaño sin que nadie lo note. Por
+eso todo usa `evento.timestamp`; `frame` solo sirve para agrupar.
 
 QUE NO RESUELVE (honesto, no una promesa)
 -------------------------------------------
-Sin apariencia, una oclusion CASI TOTAL entre dos personas que se mueven
-parecido no siempre se puede desambiguar: la geometria sola no alcanza. Eso
-produce ID switches de verdad. `contar_cruces_sospechosos` (mas abajo) cuenta
-los momentos en que la geometria se quedo sin margen para decidir -es la unica
-senal medible sin anotar video a mano-, pero es una cota, no una certeza.
+Una oclusion casi total entre dos personas que se mueven parecido no siempre
+se puede desambiguar sin apariencia: eso produce ID switches reales.
+`contar_cruces_sospechosos` cuenta los frames en que el emparejamiento
+elegido tambien habria sido valido AL REVES. Es una COTA SUPERIOR, no un
+conteo: subestima si tres o mas personas se enredan a la vez, y no sabe si
+el cruce ocurrio o si la geometria solo se puso ambigua. Sirve para lo que
+el equipo necesita: un numero que empeora si alguien toca el algoritmo.
 
-Un caso distinto, medido y documentado a proposito: una oclusion que ademas
-viene con un CAMBIO DE ESCALA grande (la persona reaparece mucho mas cerca o
-mas lejos de la camara que cuando se perdio) puede no recuperar su id aunque
-la posicion se prediga perfecto. Medido contra video_003.mp4: una persona
-ocluida 1.53s reaparecio con una caja 62% mas alta (de 256px a 416px), porque
-`predecir_bbox` nunca actualiza el ANCHO ni el ALTO, solo x,y. Con la caja de
-antes y la de despues de tamanos tan distintos, el techo teorico de IoU -aun
-con la posicion perfectamente centrada- fue 0.528, no 1.0. Subir mas el
-umbral de emparejamiento no arregla esto (bajarlo tampoco: solo cambia a
-quien mas se le acepta un emparejamiento dudoso). Lo unico que de verdad lo
-resolveria es comparar el CONTENIDO de las dos cajas -re-identificacion por
-apariencia-, y esa es justo la tecnica prohibida por la Ley 1581 y el
-contrato de privacidad del proyecto (ver docs/data-contract.md). Se documenta
-como limite conocido, no se persigue con mas parametros.
+Tampoco recupera a quien reaparece con un cambio de escala grande, aunque la
+posicion se prediga bien (medido contra video_003: un cambio del 62% en la
+altura rompe la recuperacion).
 
-CUENTA DE CRUCES SOSPECHOSOS (medicion de calidad, sin necesitar groundtruth)
--------------------------------------------------------------------------
-No hay anotaciones humanas todavia (eso es evaluacion contra `groundtruth`,
-Fase futura y de todo el equipo). Mientras tanto, esta etapa se autodiagnostica:
-en cada frame, si el emparejamiento elegido para dos tracks tambien habria sido
-valido AL REVES (intercambiando a quien le toca cada caja), no hay forma de
-saber cual de las dos versiones era la correcta. Eso se cuenta como un cruce
-sospechoso. Es una cota superior de los ID switches reales, no un conteo
-certificado: subestima si tres o mas personas se enredan a la vez, y no puede
-saber si el cruce de verdad ocurrio o si la geometria solo se puso ambigua sin
-que hubiera swap. Sirve para lo que pide el equipo: un numero que empeora o
-mejora cuando alguien toca el algoritmo.
+EL RENDER Y LOS IMPORTS PESADOS
+--------------------------------
+Reutiliza el `Renderer` de `detect` con otro color y etiqueta. `color_desde_id`
+es una funcion determinista del numero: ninguna tabla, nada derivado de la
+persona. Si el video de origen no existe, el .jsonl se escribe igual.
 
-EL VIDEO PROPIO (--render), REUTILIZANDO gondola/video/
--------------------------------------------------------
-`detect` ya sabe dibujar cajas en modo privacy/debug (`gondola/video/render.py`).
-Esta etapa reutiliza exactamente ese `Renderer`, pasandole un color y una
-etiqueta ("id N") por evento en vez de las de `detect` (verde, confianza). El
-color sale de `color_desde_id`: una funcion determinista del numero, nunca
-una tabla guardada ni nada derivado de la persona. Si el video de origen no
-existe, no se falla: el .jsonl se escribe igual y se avisa que no se pudo
-renderizar.
-
-POR QUE LOS IMPORTS DE VIDEO ESTAN DENTRO DE LAS FUNCIONES
-------------------------------------------------------------
-A diferencia del resto de este modulo (aritmetica pura, cero dependencias
-nuevas), reabrir el video para dibujar SI necesita OpenCV, que no esta en
-requirements-dev.txt. Por eso, igual que en `detect.py`, esos imports viven
-dentro de las funciones que los usan: los 7 companeros siguen corriendo
-`pytest` sin instalarlo.
+Los imports de OpenCV van DENTRO de las funciones, como en `detect.py`: los
+7 compañeros corren `pytest` sin instalar 3 GB.
 """
 
 from __future__ import annotations
@@ -182,6 +127,71 @@ EVENTOS_ENTRE_AVISOS = 2000
 rapida que YOLO, pero un video largo igual conviene que avise que sigue viva."""
 
 VELOCIDAD_MINIMA_PARA_COHERENCIA = 20.0
+
+# --------------------------------------------------------------------------
+# REAPARICION: recuperar el mismo numero, no estrenar uno
+# --------------------------------------------------------------------------
+# Cuando un track se da por perdido (MAX_AGE_S sin verse) no se tira a la
+# basura: pasa a un 'cementerio'. Si poco despues aparece una deteccion que
+# NO empareja con nadie vivo pero cae justo donde estaba uno de esos
+# perdidos, se le devuelve SU numero en vez de estrenar uno nuevo. Eso es lo
+# que evita que una misma persona salga como 'Persona 1' al principio del
+# video y como 'Persona 7' al final.
+#
+# POR QUE ASI Y NO SUBIENDO MAX_AGE_S
+# ------------------------------------
+# Es la pregunta obvia, y subir MAX_AGE_S ya se probo: EMPEORA. Medido sobre
+# video_001 (2181 detecciones): con 2.0s salen 10 tracks, con 4.0s once, con
+# 6.0s doce y con 8.0s trece. Un track vivo pero no visto sigue COMPITIENDO
+# en el emparejamiento, flotando sobre una prediccion cada vez peor, y le
+# roba detecciones a quien si esta ahi: alargar la vida de los fantasmas
+# fragmenta mas, no menos.
+#
+# El cementerio es otra cosa: un track muerto NO compite por ninguna
+# deteccion. Solo se lo consulta en el ultimo momento, cuando ya se decidio
+# que esa deteccion no es de nadie vivo y el camino normal seria estrenar un
+# numero. No puede robarle nada a nadie; como mucho, evita un numero nuevo.
+#
+# Las tres condiciones son estrictas a proposito: es preferible un numero de
+# mas a fundir dos personas distintas en una, porque eso ultimo no da ningun
+# error -solo mezcla dos recorridos y corrompe la permanencia de los dos-.
+VENTANA_DE_REAPARICION_S = 4.0
+"""Cuanto tiempo despues de perderlo se acepta que alguien reaparezca.
+
+El numero sale de mirar, en los siete videos, cada track que NACE y a que
+distancia estaba el que acababa de morir. La distancia mediana por tamano
+del hueco:
+
+    hueco 0-3s -> 193 px    (ya se rechazan por lejanos: es otra gente)
+    hueco 3-4s ->  41 px    <-- casi no se movieron: la misma persona
+    hueco 4-5s ->  86 px
+    hueco 5-8s ->  56 px
+    hueco  >8s -> 107 px
+
+La banda de 3 a 4 segundos es la de quien se quedo practicamente en el
+sitio -41 px es menos de lo que mide una persona de ancho en este
+encuadre-, asi que ahi la reaparicion esta bien sostenida. Subirlo a 4.0
+baja las identidades de 49 a 44 en los siete videos.
+
+DONDE SE PARA Y POR QUE. Con 5 segundos bajarian a 40, y con 6 a menos.
+No se hace: pasados unos segundos, 'alguien parado donde estaba el
+anterior' deja de ser evidencia de nada. El sitio frente a un estante es
+EXACTAMENTE donde se para la gente, asi que otro cliente ocupandolo es tan
+probable como que vuelva el mismo. Sin reidentificacion por apariencia
+-prohibida, ver docs/data-contract.md- no hay forma de distinguirlo, y un
+numero mas bonito conseguido adivinando no es un numero mejor. Ojo: los
+`id_switches_sospechosos` se quedan en 6 con cualquiera de estos valores,
+pero eso NO valida nada: ese contador solo mira el emparejamiento por IoU
+y la reaparicion ocurre fuera de ahi."""
+
+DISTANCIA_MAXIMA_PARA_REAPARECER = 140.0
+"""Pixeles entre donde se perdio y donde reaparece. Quien vuelve al otro lado
+del pasillo no es 'el mismo que estaba aqui', es otra persona."""
+
+PROPORCION_DE_TAMANO_PARA_REAPARECER = 2.0
+"""Cuanto puede cambiar el area de la caja. Una caja del doble o la mitad
+significa que esta al doble de cerca de la camara: no es la misma silueta
+volviendo al mismo sitio, aunque el centro coincida."""
 """Px/s por debajo de esto, un track no tiene un rumbo confiable que comparar
 (recien creado, o alguien casi quieto): la coherencia de movimiento queda
 neutra (1.0) en vez de penalizar una direccion que no significa nada."""
@@ -209,6 +219,12 @@ class Resumen:
     emparejamientos: int = 0
     tracks_activos_al_cierre: int = 0
     id_switches_sospechosos: int = 0
+    # Veces que alguien perdido recupero su numero en vez de estrenar uno.
+    # Cada una es un 'Persona 1' que no se convirtio en 'Persona 7'.
+    reapariciones: int = 0
+    # Lo mismo pero SIN que el track llegara a morir: se salvo en la
+    # segunda oportunidad del mismo frame (ver _asignar_por_frame).
+    rescates: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -326,42 +342,51 @@ def emparejar(
 ) -> tuple[dict[int, Event], list[Event]]:
     """Empareja los tracks activos con las detecciones de UN mismo frame.
 
-    El candidato tiene que solapar lo suficiente con la prediccion
-    (IOU_MINIMO_PARA_EMPAREJAR) para ser geometricamente plausible; ESO nunca
-    lo relaja la coherencia de movimiento. La coherencia SOLO desempata entre
-    candidatos cuyo IoU ya cae en el mismo escalon (NIVEL_IOU_PARA_DESEMPATE);
-    nunca hace perder a un IoU muchisimo mejor. Esto no es un detalle: se
-    intento primero multiplicar iou*coherencia directo, y en video real
-    (video_003.mp4) eso hizo que un IoU excelente (0.99, una persona
-    practicamente quieta) perdiera contra uno mediocre (0.32) solo porque la
-    caja de YOLO tembló un poco en la altura de un frame a otro -la direccion
-    de un residual minusculo es puro ruido, no una senal real de reversa, y
-    fragmento un track que no tenia nada de ambiguo. Por escalones, la
-    coherencia solo puede decidir entre candidatos que YA eran parecidos.
+    Voraz: se ordenan los pares (track, deteccion) por (escalon de IoU,
+    coherencia) y se toman mientras ninguno de los dos este usado. No es el
+    optimo (eso seria el algoritmo Hungaro), pero con la poca gente que hay
+    frente a una gondola la diferencia es despreciable y evita depender de
+    scipy solo para esto.
 
-    Dentro de un mismo escalon, dos personas que se cruzan en direcciones
-    opuestas pueden dar el MISMO IoU a las dos cajas del otro lado del cruce
-    -un empate real, no un error de redondeo- y el orden en que YOLO entrego
-    las cajas terminaria decidiendo, por accidente, cual identidad se queda
-    con cual. La direccion sí distingue: la opcion correcta continua el rumbo
-    de cada quien, la cruzada implica que alguien invirtio su movimiento de
-    un frame a otro.
+    TRES DECISIONES, CADA UNA CON SU CICATRIZ
+    ------------------------------------------
+    1. EL IoU MANDA; LA COHERENCIA SOLO DESEMPATA dentro del mismo escalon
+       (NIVEL_IOU_PARA_DESEMPATE). Se intento primero multiplicar
+       iou*coherencia, y en video_003 un IoU de 0.99 -una persona quieta-
+       perdio contra uno de 0.32 porque la caja de YOLO temblo un poco de
+       alto: la direccion de un residual minusculo es ruido, no una reversa,
+       y fragmentaba tracks que no tenian nada de ambiguo.
 
-    Voraz: se ordenan todos los pares (track, deteccion) por (escalon,
-    coherencia), descendente, y se van tomando mientras ninguno de los dos ya
-    este usado. No es el optimo matematico (eso seria el algoritmo Hungaro),
-    pero con la poca gente que hay a la vez frente a una gondola la diferencia
-    es despreciable, y evita sumar una dependencia (scipy) solo para esto.
+    2. LA COHERENCIA HACE FALTA. Dos personas que se cruzan en direcciones
+       opuestas pueden dar EL MISMO IoU a las dos cajas del otro lado -un
+       empate real-, y sin mas informacion decidiria el orden en que YOLO
+       entrego las cajas. La direccion si distingue: la opcion correcta
+       continua el rumbo, la cruzada implica invertir el movimiento en un
+       frame.
+
+    3. LA PREDICCION NO PUEDE SER PEOR QUE QUEDARSE QUIETO. El IoU de cada
+       par es el MEJOR entre la prediccion y la ultima caja conocida.
+       Extrapolar ayuda a quien sigue caminando y perjudica a quien FRENA
+       -justo lo que hace un cliente al llegar a la gondola-. Medido: el
+       track 4 daba su ultima señal en t=1.62s y el 11 nacia en t=1.71s A UN
+       PIXEL. Tomar el maximo no relaja el umbral ni cambia el desempate;
+       solo deja de castigar al track cuya prediccion se equivoco.
 
     Devuelve (emparejados: {track_id: evento}, sin_emparejar: detecciones que
-    no encontraron track y necesitan uno nuevo).
+    no encontraron track).
     """
     timestamp = eventos[0].timestamp
     candidatos: list[tuple[tuple[float, float], int, int]] = []
     for track_id, track in tracks.items():
         prediccion = predecir_bbox(track, timestamp)
         for indice, evento in enumerate(eventos):
-            valor = iou(prediccion, evento.detection.bbox)
+            # El MEJOR de dos lecturas: donde la velocidad dice que deberia
+            # estar, y donde estaba la ultima vez que se vio. Ver
+            # "LA PREDICCION NO PUEDE SER PEOR QUE QUEDARSE QUIETO", arriba.
+            valor = max(
+                iou(prediccion, evento.detection.bbox),
+                iou(track.bbox, evento.detection.bbox),
+            )
             if valor >= IOU_MINIMO_PARA_EMPAREJAR:
                 escalon = round(valor / NIVEL_IOU_PARA_DESEMPATE)
                 coherencia = coherencia_de_movimiento(track, prediccion, evento)
@@ -428,6 +453,43 @@ def color_desde_id(track_id: int) -> tuple[int, int, int]:
     return (int(b * 255), int(g * 255), int(r * 255))  # BGR: el orden de OpenCV
 
 
+def buscar_reaparicion(
+    cementerio: dict[int, Track], evento: Event, timestamp: float,
+    ya_usados: set[int],
+) -> int | None:
+    """El track perdido que mejor explica esta deteccion, o None.
+
+    Se devuelve el MAS CERCANO de los que cumplen las tres condiciones (ver
+    las constantes de arriba). Si ninguno cumple, None: quien llama estrena
+    un numero, que es lo correcto cuando no hay evidencia de que sea alguien
+    ya conocido.
+    """
+    area_nueva = evento.detection.bbox.width * evento.detection.bbox.height
+    cx, cy = centro(evento.detection.bbox)
+    mejor: tuple[float, int] | None = None
+
+    for track_id, track in cementerio.items():
+        if track_id in ya_usados:
+            continue
+        if timestamp - track.timestamp > VENTANA_DE_REAPARICION_S:
+            continue
+        px, py = centro(track.bbox)
+        distancia = math.hypot(cx - px, cy - py)
+        if distancia > DISTANCIA_MAXIMA_PARA_REAPARECER:
+            continue
+        area_vieja = track.bbox.width * track.bbox.height
+        if area_vieja <= 0:
+            continue
+        proporcion = area_nueva / area_vieja
+        if not (1 / PROPORCION_DE_TAMANO_PARA_REAPARECER <= proporcion
+                <= PROPORCION_DE_TAMANO_PARA_REAPARECER):
+            continue
+        if mejor is None or distancia < mejor[0]:
+            mejor = (distancia, track_id)
+
+    return mejor[1] if mejor else None
+
+
 def _asignar_por_frame(
     eventos: Iterator[Event], resumen: Resumen
 ) -> Iterator[tuple[int, list[Event]]]:
@@ -438,6 +500,10 @@ def _asignar_por_frame(
     emparejar cada grupo con su frame real sin volver a agrupar nada.
     """
     tracks: dict[int, Track] = {}
+    # Tracks perdidos que todavia pueden reaparecer. No compiten por ninguna
+    # deteccion: solo se consultan antes de estrenar un numero nuevo (ver
+    # buscar_reaparicion).
+    cementerio: dict[int, Track] = {}
     siguiente_id = 1
 
     for frame, grupo_iter in groupby(eventos, key=lambda e: e.frame):
@@ -449,7 +515,13 @@ def _asignar_por_frame(
         # distinta que aparece despues en el mismo sitio.
         vencidos = [tid for tid, tr in tracks.items() if timestamp - tr.timestamp > MAX_AGE_S]
         for tid in vencidos:
-            del tracks[tid]
+            cementerio[tid] = tracks.pop(tid)
+
+        # Los que ya ni pueden reaparecer se olvidan del todo: el cementerio
+        # no crece sin limite aunque el video dure horas.
+        for tid in [t for t, tr in cementerio.items()
+                    if timestamp - tr.timestamp > VENTANA_DE_REAPARICION_S]:
+            del cementerio[tid]
 
         emparejados, sin_emparejar = emparejar(tracks, grupo)
         resumen.id_switches_sospechosos += contar_cruces_sospechosos(
@@ -461,7 +533,49 @@ def _asignar_por_frame(
             evento.track_id = track_id
             resumen.emparejamientos += 1
 
+        # SEGUNDA OPORTUNIDAD, antes de estrenar numeros.
+        #
+        # Los que no encontraron pareja se miran dos veces mas, con la
+        # regla de posicion y tamano en vez de con IoU:
+        #
+        #   1. contra los tracks VIVOS que este frame se quedaron sin
+        #      nada. Caso real medido en video_001: alguien se movia y su
+        #      caja se encogio a la mitad de area en un solo frame (se
+        #      alejo de la camara); a 94 px de distancia el IoU no llegaba
+        #      al umbral y nacia 'Persona 2' encima de 'Persona 1', que
+        #      seguia viva. El cementerio no lo cubre justamente porque el
+        #      track NO habia muerto.
+        #   2. contra los tracks ya perdidos (el cementerio).
+        #
+        # En ese orden a proposito: un track vivo tiene informacion mas
+        # fresca que uno muerto, asi que se le da preferencia.
+        vivos_sin_pareja = {
+            tid: tr for tid, tr in tracks.items() if tid not in emparejados
+        }
+        usados_en_este_frame: set[int] = set()
         for evento in sin_emparejar:
+            segunda = buscar_reaparicion(
+                vivos_sin_pareja, evento, timestamp, usados_en_este_frame
+            )
+            if segunda is not None:
+                usados_en_este_frame.add(segunda)
+                actualizar_track(tracks[segunda], evento)
+                evento.track_id = segunda
+                resumen.rescates += 1
+                continue
+
+            # Es alguien que ya estaba y se perdio del todo? Recupera SU numero.
+            reaparecido = buscar_reaparicion(
+                cementerio, evento, timestamp, usados_en_este_frame
+            )
+            if reaparecido is not None:
+                usados_en_este_frame.add(reaparecido)
+                tracks[reaparecido] = cementerio.pop(reaparecido)
+                actualizar_track(tracks[reaparecido], evento)
+                evento.track_id = reaparecido
+                resumen.reapariciones += 1
+                continue
+
             tracks[siguiente_id] = Track(bbox=evento.detection.bbox, timestamp=evento.timestamp)
             evento.track_id = siguiente_id
             resumen.tracks_creados += 1
@@ -549,6 +663,24 @@ def _procesar(cfg: Config, entrada: Path, resumen: Resumen) -> Iterator[Event]:
     from gondola.video.reader import VideoReader
     from gondola.video.render import Renderer
 
+    # Numero que se DIBUJA, no el track_id. El track_id es un contador
+    # global que solo sube: cada track que se abre y se descarta consume uno,
+    # asi que en un video con una sola persona se acababa viendo "id 7"
+    # mientras la cabecera decia "personas: 1". Aqui se renumera desde 1 en
+    # orden de aparicion. Como el render va en streaming (grupos es un
+    # generador que se consume en orden de frame) se construye sobre la
+    # marcha: da el mismo resultado que recorrerlo todo antes, sin tener que
+    # cargar el archivo entero en memoria. El track_id del .jsonl no cambia.
+    numeros_por_track: dict[int, int] = {}
+
+    def numero_visible(evento) -> str:
+        tid = evento.track_id
+        if tid is None:
+            return "?"
+        if tid not in numeros_por_track:
+            numeros_por_track[tid] = len(numeros_por_track) + 1
+        return str(numeros_por_track[tid])
+
     video_salida = pipeline.render_path("track", cfg, cfg.render_mode)
     with VideoReader(cfg.video_path) as video, Renderer(
         video_salida, cfg.render_mode, video.info.width, video.info.height, video.info.fps
@@ -561,7 +693,7 @@ def _procesar(cfg: Config, entrada: Path, resumen: Resumen) -> Iterator[Event]:
                 renderer.write(
                     imagen, grupo, indice, timestamp,
                     color_de=lambda e: color_desde_id(e.track_id),
-                    etiqueta_de=lambda e: f"id {e.track_id}",
+                    etiqueta_de=lambda e: f"id {numero_visible(e)}",
                 )
             yield from grupo
 
@@ -636,6 +768,8 @@ def _escribir_resumen(destino: Path, cfg: Config, resumen: Resumen, transcurrido
         "params": {
             "iou_minimo_para_emparejar": IOU_MINIMO_PARA_EMPAREJAR,
             "max_age_s": MAX_AGE_S,
+            "ventana_de_reaparicion_s": VENTANA_DE_REAPARICION_S,
+            "distancia_maxima_para_reaparecer": DISTANCIA_MAXIMA_PARA_REAPARECER,
         },
         "results": {
             "eventos_procesados": resumen.eventos_procesados,
@@ -643,6 +777,8 @@ def _escribir_resumen(destino: Path, cfg: Config, resumen: Resumen, transcurrido
             "emparejamientos": resumen.emparejamientos,
             "tracks_activos_al_cierre": resumen.tracks_activos_al_cierre,
             "id_switches_sospechosos": resumen.id_switches_sospechosos,
+            "reapariciones": resumen.reapariciones,
+            "rescates": resumen.rescates,
         },
         "performance": {
             "segundos": round(transcurrido, 2),
@@ -666,6 +802,10 @@ def _imprimir_resultado(
     print(f"  Emparejamientos        {resumen.emparejamientos}")
     print(f"  Tracks activos al cierre  {resumen.tracks_activos_al_cierre}  "
           f"(quedaron 'vivos' al terminar el video)")
+    print(f"  Reapariciones          {resumen.reapariciones}  "
+          f"(veces que alguien perdido recupero SU numero en vez de estrenar uno)")
+    print(f"  Rescates               {resumen.rescates}  "
+          f"(enganchados en segunda oportunidad, sin llegar a perderse)")
     print(f"  ID switches sospechosos   {resumen.id_switches_sospechosos}  "
           f"(cota superior sin groundtruth; ver docstring del modulo)")
     print(f"  Tiempo                 {transcurrido:.2f} s")

@@ -2,12 +2,19 @@
 // Parte del dashboard de Gondola Inteligente. Se carga desde index.html
 // como <script> clasico (no modulo ES): ver el comentario de index.html.
 
+// Lo que se muestra cuando un dato NO SE PUEDE calcular. OJO: no es lo
+// mismo que cero. "0 put-backs" es una medicion; una tasa de rechazo sin
+// ninguna toma registrada no tiene denominador y NO es 0% -mostrar 0 ahi
+// seria afirmar algo que el sistema no midio-. Antes aqui habia un guion
+// suelto ("—"), que se leia como si la pantalla estuviera rota.
+const SIN_DATO = 'Sin datos';
+
 // --------------------------------------------------------------------------
 // Formateo: convierten numeros/fechas crudas de la API en texto legible.
 // Ninguna hace calculos de negocio, solo presentacion.
 // --------------------------------------------------------------------------
 function formatDwellTime(seconds) {
-  if (seconds === null || seconds === undefined || isNaN(seconds)) return '—';
+  if (seconds === null || seconds === undefined || isNaN(seconds)) return SIN_DATO;
   if (seconds < 0) return '0.0s';
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const minutes = Math.floor(seconds / 60);
@@ -15,20 +22,35 @@ function formatDwellTime(seconds) {
   return `${minutes}m ${remaining}s`;
 }
 function formatPercentage(value) {
-  if (value === null || value === undefined || isNaN(value)) return '—';
+  if (value === null || value === undefined || isNaN(value)) return SIN_DATO;
   return `${(value * 100).toFixed(1)}%`;
 }
 function formatNumber(value) {
-  if (value === null || value === undefined || isNaN(value)) return '—';
+  if (value === null || value === undefined || isNaN(value)) return SIN_DATO;
   return new Intl.NumberFormat('es-ES').format(value);
 }
+// Por debajo de estas tomas, la tasa de rechazo no aguanta un calificativo:
+// cada gesto vale 20 puntos porcentuales o mas. Ver calculateRejectionRate.
+const MINIMO_TOMAS_PARA_CALIFICAR = 5;
+
 function calculateRejectionRate(putBack, pickUp) {
   if (putBack === null || putBack === undefined || pickUp === null || pickUp === undefined) {
-    return { rate: null, label: '—', explanation: 'Sin datos suficientes' };
+    return { rate: null, label: SIN_DATO, explanation: 'Sin datos suficientes' };
   }
-  if (pickUp === 0) return { rate: null, label: '—', explanation: 'Sin tomas registradas' };
+  if (pickUp === 0) return { rate: null, label: SIN_DATO, explanation: 'Sin tomas registradas' };
   const rate = putBack / pickUp;
-  return { rate, label: `${(rate * 100).toFixed(1)}%`, explanation: `${putBack} de ${pickUp} tomas devueltas` };
+  // Con muy pocas tomas, UNA devolucion de mas o de menos mueve la tasa
+  // decenas de puntos: 0% con 4 tomas y 25% con 4 tomas son el mismo video
+  // con un gesto de diferencia. Calificarla de "Optimo" o "Atencion" ahi es
+  // ponerle un juicio a algo que todavia es ruido, asi que quien pinte la
+  // tarjeta usa esta bandera para decir "muestra corta" en vez de calificar.
+  // El porcentaje se sigue mostrando: el dato no se esconde, se contextualiza.
+  return {
+    rate,
+    label: `${(rate * 100).toFixed(1)}%`,
+    explanation: `${putBack} de ${pickUp} tomas devueltas`,
+    muestraCorta: pickUp < MINIMO_TOMAS_PARA_CALIFICAR,
+  };
 }
 // Los UNICOS video_id que son datos ficticios metidos a mano en PostgreSQL
 // (ver backend/database/seed_example.sql), no un video real que paso por
@@ -57,13 +79,13 @@ function isDemoVideo(videoId) {
   return videoId.toLowerCase().startsWith('video_demo_');
 }
 function formatDuration(durationSeconds) {
-  if (!durationSeconds || isNaN(durationSeconds)) return '—';
+  if (!durationSeconds || isNaN(durationSeconds)) return SIN_DATO;
   const mins = Math.floor(durationSeconds / 60);
   const secs = Math.floor(durationSeconds % 60);
   return mins === 0 ? `${secs}s` : `${mins}m ${secs}s`;
 }
 function formatDateTime(isoString) {
-  if (!isoString) return '—';
+  if (!isoString) return SIN_DATO;
   try {
     const date = new Date(isoString);
     if (isNaN(date.getTime())) return isoString;

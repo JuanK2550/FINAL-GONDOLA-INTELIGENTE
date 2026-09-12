@@ -1,64 +1,40 @@
-"""Etapa final: metricas agregadas por gondola. Responsable: Persona 6.
+"""Etapa final: metricas agregadas por zona. Responsable: Persona 6.
 
-QUE HACE
---------
-Lee TODOS los eventos de <video_id>.interact.jsonl (ya con zona, track_id e
-interaccion resueltos por las etapas anteriores) y produce UN JSON con los
-agregados por gondola: cuanta gente paso, cuantas interacciones hubo, cuantos
-productos se tomaron y devolvieron, y la permanencia promedio.
+Lee `<video_id>.interact.jsonl` y produce `<video_id>.metrics.json` con los
+agregados por gondola y por estante, que es lo que importa
+`backend/importer.py`.
 
-Comando: python -m gondola metrics
-Entrada: <video_id>.interact.jsonl  (la produce la etapa 'interact')
-Salida:  <video_id>.metrics.json    (la lee backend/importer.py, Persona 7)
+Aritmetica pura: no toca video, ni YOLO, ni PostgreSQL -el pipeline de
+vision NUNCA escribe en la base de datos, ver `docs/architecture.md`-. Por
+eso aqui no hace falta el patron de imports pesados dentro de funciones.
 
-LA TRAMPA QUE ESTE MODULO TIENE QUE EVITAR
--------------------------------------------
-Un mismo track_id aparece en CIENTOS de eventos, uno por cada frame en el
-que esa persona fue detectada. Para "cuanta gente paso" hay que contar
-IDENTIFICADORES DISTINTOS (`len(set(track_ids))`), JAMAS numero de filas.
-Si se cuentan filas, el flujo sale muchisimas veces mas grande que la
-realidad: una tienda por la que pasaron 3 personas mostraria "3801 personas".
+LAS DOS TRAMPAS QUE ESTE MODULO EXISTE PARA EVITAR
+---------------------------------------------------
+1. CONTAR FILAS EN VEZ DE PERSONAS. Un mismo track_id aparece en cientos de
+   eventos, uno por frame. "Cuanta gente paso" son IDENTIFICADORES DISTINTOS,
+   jamas numero de filas: contando filas, una tienda por la que pasaron 3
+   personas mostraria "3801 personas".
 
-Lo mismo con la permanencia: dwell_time_s es un valor ACUMULADO que se repite
-en muchos eventos de la misma persona (crece con el tiempo). Promediar TODAS
-las filas cuenta el mismo recorrido cientos de veces y desvirtua el numero.
-Aqui se toma, para cada (track_id, zone_id), el dwell_time_s MAXIMO visto
-(el ultimo acumulado, que es el tiempo real que esa persona estuvo ahi), y
-se promedian esos maximos, uno por persona.
+2. PROMEDIAR UN dwell_time ACUMULADO. Ese valor se repite y crece en cada
+   evento de la misma persona, asi que promediar todas las filas cuenta el
+   mismo recorrido cientos de veces. Aqui se toma el MAXIMO por
+   (track_id, zone_id) -su ultimo acumulado- y se promedian esos maximos,
+   uno por persona.
 
-QUE ZONA SE USA PARA AGRUPAR
------------------------------
-Cada evento aporta a DOS filas a la vez (cuando trae estante): la de su
-GONDOLA completa (evento.zone.zone_id) y la de su ESTANTE dentro de esa
-gondola (evento.zone.zone_id + evento.zone.segment). La fila de la gondola
-es la suma de todos sus estantes (mas los eventos sin segment, alguien
-frente a la gondola sin que el tracker lo ubique en un estante concreto):
-sirve para el total de la vitrina; las filas de estante son las que
-permiten comparar, por ejemplo, "Cereales" contra "Snacks y pasabocas"
-dentro de la misma gondola_A.
+CADA EVENTO APORTA A DOS FILAS
+-------------------------------
+La de su GONDOLA y la de su ESTANTE. La fila de gondola sirve para el total
+de la vitrina; las de estante permiten comparar "Cereales" contra "Snacks"
+dentro de la misma gondola.
 
-El identificador de fila para un estante es "<zone_id de la gondola>:<segment>"
-(ej. "gondola_A:estante_2") -exactamente la misma convencion que ya usa
-`backend/importer.py` en `_zone_id_de_estante()| para construir el zone_id
-unico de esa fila en la tabla `zones`-. Si aqui se usara un identificador
-distinto, el importador nunca encontraria una fila de metrics que le
-haga match a su zona de estante, y volveria a pasar lo mismo que este
-cambio arregla: `GET /videos/{id}/zones` (que hace INNER JOIN con
-`metrics`, ver `backend/db.py:list_zones_for_video`) solo devolveria la
-gondola, nunca sus estantes.
+El id de una fila de estante es `<zone_id>:<segment>` -la MISMA convencion
+que `_zone_id_de_estante()` en `backend/importer.py`-. Si aqui se usara otro
+identificador, el importador no encontraria la fila que le hace match y
+`GET /videos/{id}/zones` devolveria la gondola sin sus estantes.
 
-Eventos con zone.zone_id en null (alguien en un pasillo, entre gondolas) no
-se pierden de vista: se cuentan aparte, en 'sin_zona', y se informan en la
-salida por pantalla, pero no generan ninguna fila de metrics (la tabla
-exige un zone_id valido).
-
-POR QUE NO SE IMPORTA NADA PESADO
------------------------------------
-Esta etapa es aritmetica pura sobre lo que ya escribieron las etapas
-anteriores: no toca video, no toca YOLO, no toca PostgreSQL (el pipeline de
-vision NUNCA escribe en la base de datos, ver docs/architecture.md). Por eso
-no hace falta el patron de "imports pesados dentro de la funcion" que usa
-detect.py: aqui no hay ningun import pesado.
+Los eventos sin zona (alguien en el pasillo) se cuentan aparte en
+'sin_zona' y se informan por pantalla, pero no generan fila: la tabla exige
+un zone_id valido.
 """
 
 from __future__ import annotations
@@ -90,6 +66,28 @@ class _AgregadoZona:
     # una lista: si el mismo track_id aparece 500 veces, solo interesa su
     # valor mas alto, no las 500 filas.
     dwell_maximo_por_persona: dict[int, float] = field(default_factory=dict)
+    # Primer y ultimo instante en que se vio cada track_id en esta zona. Solo
+    # sirven para descartar las siluetas de un suspiro, ver
+    # PRESENCIA_MINIMA_S y `personas_reales`.
+    primer_visto: dict[int, float] = field(default_factory=dict)
+    ultimo_visto: dict[int, float] = field(default_factory=dict)
+    # QUIENES interactuaron y quienes tomaron algo, no cuantas veces. Ver
+    # `cerrar_zona`: interaction_rate y conversion_rate son proporciones de
+    # PERSONAS, y para eso hacen falta identificadores, no contadores.
+    tracks_con_interaccion: set[int] = field(default_factory=set)
+    tracks_con_pick_up: set[int] = field(default_factory=set)
+
+    def personas_reales(self) -> set[int]:
+        """Los track_id que estuvieron al menos PRESENCIA_MINIMA_S en la zona.
+
+        Es el conjunto que cuenta como "personas": el resto son fragmentos de
+        deteccion, no gente (ver la constante para los numeros medidos).
+        """
+        return {
+            tid for tid in self.track_ids
+            if self.ultimo_visto.get(tid, 0.0) - self.primer_visto.get(tid, 0.0)
+            >= PRESENCIA_MINIMA_S
+        }
 
 
 @dataclass
@@ -110,6 +108,29 @@ class Resumen:
 
 SEPARADOR_ESTANTE = ":"  # igual que backend/importer.py:_zone_id_de_estante
 
+PRESENCIA_MINIMA_S = 1.0
+"""Segundos que una silueta tiene que durar para contar como UNA PERSONA.
+
+No es un numero elegido a gusto: sale de mirar la duracion de los 89 tracks
+de los seis videos reales. Hay un corte limpio, no un degradado:
+
+    video_002 -> los tracks de 0.00s a 1.27s tienen entre 1 y 13
+                 observaciones; el siguiente ya salta a 64.
+    video_004 -> de 0.00s a 1.13s, entre 1 y 28 observaciones; el
+                 siguiente, 26 y subiendo hasta 525.
+
+Es decir: por debajo de un segundo no hay nadie caminando, hay deteccion
+que parpadeo. Sin este filtro, `people_count` cuenta esos parpadeos como
+clientes distintos y el dashboard dice "26 personas" de un clip en el que
+se ven bastantes menos. Con el, video_004 pasa de 26 a 15.
+
+Lo que NO arregla, y hay que decirlo: si el rastreador pierde a alguien
+durante mas de MAX_AGE_S y lo vuelve a enganchar con otro numero, los DOS
+fragmentos duran mas de un segundo y los dos se cuentan. `people_count`
+sigue siendo una cota superior de la gente real, no un censo. Ver
+`ai-service/gondola/stages/track.py`, seccion "QUE NO RESUELVE".
+"""
+
 
 def _sumar_a_fila(agregados: dict[str, _AgregadoZona], fila_id: str, evento) -> None:
     """Suma un evento a UNA fila (gondola o estante). Compartida entre las
@@ -119,6 +140,8 @@ def _sumar_a_fila(agregados: dict[str, _AgregadoZona], fila_id: str, evento) -> 
 
     if evento.track_id is not None:
         zona.track_ids.add(evento.track_id)
+        zona.primer_visto.setdefault(evento.track_id, evento.timestamp)
+        zona.ultimo_visto[evento.track_id] = evento.timestamp
         if evento.metrics.dwell_time is not None:
             actual = zona.dwell_maximo_por_persona.get(evento.track_id, 0.0)
             if evento.metrics.dwell_time > actual:
@@ -127,6 +150,10 @@ def _sumar_a_fila(agregados: dict[str, _AgregadoZona], fila_id: str, evento) -> 
     if evento.interaction.event is not None:
         zona.interaction_count += 1
         valor = evento.interaction.event.value
+        if evento.track_id is not None:
+            zona.tracks_con_interaccion.add(evento.track_id)
+            if valor == "PICK_UP":
+                zona.tracks_con_pick_up.add(evento.track_id)
         if valor == "PICK_UP":
             zona.pick_up_count += 1
         elif valor == "PUT_BACK":
@@ -175,11 +202,18 @@ def cerrar_zona(zona: _AgregadoZona) -> dict:
     """Convierte los acumuladores en crudo de una gondola en las columnas
     exactas que espera backend/importer.py (y, detras, metrics.people_count
     etc. de schema.sql)."""
-    people_count = len(zona.track_ids)  # DISTINCT, nunca len(filas)
+    personas = zona.personas_reales()   # DISTINCT, nunca len(filas)
+    people_count = len(personas)
 
+    # La permanencia promedio se promedia entre LAS MISMAS personas que se
+    # contaron arriba. Si no, un fragmento de 0.3s tira el promedio hacia
+    # abajo sin aparecer en el denominador de ninguna tasa: dos numeros de
+    # la misma fila hablando de poblaciones distintas.
     average_dwell_time_s = None
-    if zona.dwell_maximo_por_persona:
-        valores = zona.dwell_maximo_por_persona.values()
+    valores = [
+        v for tid, v in zona.dwell_maximo_por_persona.items() if tid in personas
+    ]
+    if valores:
         average_dwell_time_s = round(sum(valores) / len(valores), 3)
 
     return {
@@ -188,9 +222,28 @@ def cerrar_zona(zona: _AgregadoZona) -> dict:
         "pick_up_count": zona.pick_up_count,
         "put_back_count": zona.put_back_count,
         "average_dwell_time_s": average_dwell_time_s,
-        "interaction_rate": _tasa(zona.interaction_count, people_count),
+        # PROPORCIONES DE PERSONAS, no de eventos.
+        #
+        # Antes esto era `interaction_count / people_count` -lo que el
+        # comentario de schema.sql llama "interacciones / personas"-, y eso
+        # no es una proporcion: una misma persona puede alcanzar el estante
+        # tres veces, asi que el numero pasa de 1 con facilidad. Como la
+        # columna tiene un CHECK (BETWEEN 0 AND 1), `_tasa` lo recortaba a
+        # 1.0 y el dashboard mostraba "100.0%" en TODAS las filas -leido por
+        # cualquiera como "el 100% de la gente interactuo", que es una
+        # afirmacion distinta y mas fuerte que la que sostienen los datos
+        # (bug real, visto en pantalla con video_005: 19 interacciones entre
+        # 8 personas daba 2.4, recortado a 1.0)-.
+        #
+        # Contando PERSONAS DISTINTAS que interactuaron al menos una vez, el
+        # numero ya es una proporcion de verdad, nunca pasa de 1 sin recortar
+        # nada, y dice lo que su nombre promete. `pick_up_rate` se queda como
+        # estaba: ahi si se comparan eventos con eventos (cuantas de las
+        # interacciones acabaron en toma) y un PICK_UP siempre es una
+        # interaccion, asi que no puede pasar de 1.
+        "interaction_rate": _tasa(len(zona.tracks_con_interaccion & personas), people_count),
         "pick_up_rate": _tasa(zona.pick_up_count, zona.interaction_count),
-        "conversion_rate": _tasa(zona.pick_up_count, people_count),
+        "conversion_rate": _tasa(len(zona.tracks_con_pick_up & personas), people_count),
     }
 
 
@@ -218,7 +271,11 @@ def run(cfg: Config) -> int:
 
     zonas_json = {zone_id: cerrar_zona(zona) for zone_id, zona in agregados.items()}
     resumen.zonas_con_datos = len(zonas_json)
-    resumen.personas_totales = len({tid for z in agregados.values() for tid in z.track_ids})
+    # Mismo criterio que people_count de cada fila: un parpadeo de
+    # deteccion no es una persona (ver PRESENCIA_MINIMA_S).
+    resumen.personas_totales = len(
+        {tid for z in agregados.values() for tid in z.personas_reales()}
+    )
 
     salida = {
         "contract_version": CONTRACT_VERSION,

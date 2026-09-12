@@ -36,7 +36,10 @@ from gondola.stages.interact import (
     VENTANA_MEDIANA_S,
     Muestra,
     Resumen,
+    PRESENCIA_MINIMA_S,
+    _numeros_para_mostrar,
     _procesar,
+    _tracks_confirmados,
     aspecto,
     aviso_de_stride,
     categorias_por_estante,
@@ -829,3 +832,85 @@ def test_la_ventana_de_mediana_sigue_siendo_la_recalibrada_con_merl():
     assert MEDIA_VENTANA_S == 2.0
     assert LATENCIA_S == 2.5
     assert UMBRAL_RAZON_ASPECTO == 1.10
+
+
+# --------------------------------------------------------------------------
+# Numeracion de las etiquetas del video (no toca el contrato)
+# --------------------------------------------------------------------------
+
+def test_los_track_id_se_renumeran_desde_uno_para_dibujar():
+    """El track_id es un contador global: si el seguimiento abrio y descarto
+    tracks antes, la primera persona del video puede tener el id 7. En el
+    video se dibuja "Persona 1", no "Persona 7"."""
+    eventos = [crear_evento(0, track_id=7), crear_evento(1, track_id=7)]
+    assert _numeros_para_mostrar(eventos) == {7: 1}
+
+
+def test_la_numeracion_sigue_el_orden_de_aparicion():
+    eventos = [
+        crear_evento(0, track_id=12),
+        crear_evento(1, track_id=3),
+        crear_evento(2, track_id=12),   # ya visto: conserva su numero
+        crear_evento(3, track_id=40),
+    ]
+    assert _numeros_para_mostrar(eventos) == {12: 1, 3: 2, 40: 3}
+
+
+def test_los_eventos_sin_track_id_no_consumen_numero():
+    """detect escribe track_id=None; solo track lo rellena. Un evento sin id
+    no puede gastar un numero de persona."""
+    sin_id = crear_evento(0, track_id=1)
+    sin_id.track_id = None
+    eventos = [sin_id, crear_evento(1, track_id=9)]
+    assert _numeros_para_mostrar(eventos) == {9: 1}
+
+
+def test_renumerar_no_modifica_el_track_id_del_evento():
+    """La renumeracion es SOLO para dibujar: el campo del contrato, que es de
+    la Persona 3 y viaja al .jsonl y a la base de datos, no se toca."""
+    eventos = [crear_evento(0, track_id=7)]
+    _numeros_para_mostrar(eventos)
+    assert eventos[0].track_id == 7
+
+
+# --------------------------------------------------------------------------
+# Que se DIBUJA en el video: solo lo que el sistema puede llamar persona
+# --------------------------------------------------------------------------
+
+def test_una_silueta_de_menos_de_un_segundo_no_se_confirma():
+    """Caso medido: en el video subido de prueba, 28 tracks para ~8 personas.
+    Los que duran un parpadeo no son gente, son deteccion inestable."""
+    largo = [crear_evento(f, track_id=1) for f in range(0, 90, 3)]   # 2.9s
+    parpadeo = [crear_evento(10, track_id=77), crear_evento(11, track_id=77)]
+    assert _tracks_confirmados(largo + parpadeo) == {1}
+
+
+def test_un_track_de_un_solo_evento_nunca_se_confirma():
+    assert _tracks_confirmados([crear_evento(5, track_id=4)]) == set()
+
+
+def test_el_umbral_de_confirmacion_es_el_mismo_que_el_de_las_metricas():
+    """Si el video dibujara gente que las metricas no cuentan, el jurado
+    veria "Persona 23" en pantalla y "12 personas" en la tabla."""
+    from gondola.stages.metrics import PRESENCIA_MINIMA_S as EN_METRICAS
+    assert PRESENCIA_MINIMA_S == EN_METRICAS
+
+
+def test_numerar_solo_a_los_confirmados_deja_los_numeros_seguidos():
+    """Lo que el usuario ve: el video termina en "Persona 2", no en
+    "Persona 3", cuando uno de los tres tracks era un parpadeo."""
+    eventos = (
+        [crear_evento(f, track_id=5) for f in range(0, 90, 3)]
+        + [crear_evento(10, track_id=6)]                        # parpadeo
+        + [crear_evento(f, track_id=9) for f in range(30, 120, 3)]
+    )
+    confirmados = _tracks_confirmados(eventos)
+    assert _numeros_para_mostrar(eventos, confirmados) == {5: 1, 9: 2}
+
+
+def test_sin_confirmados_se_numera_a_todos_como_antes():
+    """`confirmados=None` mantiene el comportamiento anterior: quien llame sin
+    filtro (o un test viejo) sigue viendo la numeracion completa."""
+    eventos = [crear_evento(0, track_id=7), crear_evento(1, track_id=8)]
+    assert _numeros_para_mostrar(eventos) == {7: 1, 8: 2}
+

@@ -53,10 +53,10 @@ function renderCompareNumbers(a, b) {
       <div class="text-[10px] text-[#A8A29E] font-bold">VS</div>
       <div class="text-xs font-semibold text-[#1F6C9F] truncate" title="${esc(b.source_name || b.video_id)}">${esc(b.source_name || b.video_id)}</div>
     </div>
-    ${compareRow('Personas', a.people_count, b.people_count)}
+    ${compareRow('Personas en cámara', a.people_count, b.people_count)}
     ${compareRow('Interacciones', a.interaction_count, b.interaction_count)}
     ${compareRow('Permanencia', a.average_dwell_time_s, b.average_dwell_time_s, formatDwellTime)}
-    ${compareRow('Tasa de rechazo', rejA.rate !== null ? Math.round(rejA.rate * 100) + '%' : '—', rejB.rate !== null ? Math.round(rejB.rate * 100) + '%' : '—', (v) => v)}
+    ${compareRow('Tasa de rechazo', rejA.rate !== null ? Math.round(rejA.rate * 100) + '%' : SIN_DATO, rejB.rate !== null ? Math.round(rejB.rate * 100) + '%' : SIN_DATO, (v) => v)}
   </div>`;
 }
 
@@ -82,9 +82,17 @@ function renderVideoColumn(slot) {
   const placeholderId = `video-compare-${slot.toLowerCase()}-placeholder`;
   const idPrefix = slot.toLowerCase();
 
+  // Mismo motivo que en renderVideoPlayer() (vista-panel.js): el hueco usa
+  // la proporcion real del video (current.width/height) en vez de una
+  // altura fija, para que el <video> no deje franjas negras a los lados.
+  // SIN max-height: combinado con width:100%, en pantallas anchas y bajas
+  // el navegador recortaba la altura pero dejaba el ancho al 100%,
+  // rompiendo la proporcion y trayendo de vuelta las franjas negras
+  // (bug real, visto con captura -ver el commit que quito esto).
+  const aspectoCompare = current && current.width && current.height ? `${current.width} / ${current.height}` : '16 / 9';
   const videoCard = demo
     ? `<div class="bg-white rounded-xl border border-[#EAEAEA] p-5 flex items-center justify-center text-center text-xs text-[#787774]" style="min-height:220px">Video de prueba: sin grabación real que mostrar</div>`
-    : `<div class="bg-white rounded-xl border border-[#EAEAEA] p-3 shadow-xs"><div id="${placeholderId}" class="w-full rounded-lg bg-[#0B1220]" style="height:220px"></div></div>`;
+    : `<div class="bg-white rounded-xl border border-[#EAEAEA] p-3 shadow-xs"><div id="${placeholderId}" class="w-full rounded-lg bg-[#0B1220]" style="aspect-ratio:${aspectoCompare}"></div></div>`;
 
   return `
   <div class="space-y-4">

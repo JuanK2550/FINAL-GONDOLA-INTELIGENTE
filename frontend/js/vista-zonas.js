@@ -38,11 +38,11 @@ function renderSummaryCards(bundle = bundleDe(), idPrefix = '') {
          ("PICK-/UPS", "TASA / RECHAZO") con los subtextos cortados. Con
          idPrefix (o sea, dentro de comparar) se baja a 2-3 columnas. -->
     <div class="kpi-grid ${entra} grid gap-3 sm:gap-4 ${idPrefix ? 'grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6'}">
-      ${metricCard({ id: mid('people-count'), icono: 'users-three', title: 'Tráfico Total', value: formatNumber(d.people_count), countTarget: d.people_count, subtext: 'personas detectadas', badge: '100% Anónimo', tone: 'neutral', barColor: '#1F6C9F', progressPercent: d.people_count > 0 ? 65 : 0, tooltip: 'Conteo de identificadores de seguimiento únicos (track_id temporales) detectados en el área del pasillo.' })}
-      ${metricCard({ id: mid('interaction-count'), icono: 'chat-circle-dots', title: 'Interacciones', value: formatNumber(d.interaction_count), countTarget: d.interaction_count, subtext: `${interactionRateVal}% rate`, badge: `${d.people_count > 0 ? (d.interaction_count / d.people_count).toFixed(1) : '0'} / pers`, tone: 'info', barColor: '#1F6C9F', progressPercent: interactionRateVal, tooltip: 'Eventos donde un cliente se detuvo dentro de la zona de atención de la góndola.' })}
+      ${metricCard({ id: mid('people-count'), icono: 'users-three', title: 'Tráfico Total', value: formatNumber(d.people_count), countTarget: d.people_count, subtext: 'personas vistas por la cámara', badge: '100% Anónimo', tone: 'neutral', barColor: '#1F6C9F', progressPercent: null, tooltip: 'Siluetas distintas (track_id temporales) que la cámara vio en TODO el encuadre, hayan entrado o no a una góndola. Por eso suele ser MAYOR que la columna Personas de la tabla de zonas, que solo cuenta a quien entró en esa zona concreta: no se contradicen, miden cosas distintas. Tampoco se cuentan las siluetas que duraron menos de un segundo: son parpadeos de la detección, no clientes.' })}
+      ${metricCard({ id: mid('interaction-count'), icono: 'chat-circle-dots', title: 'Interacciones', value: formatNumber(d.interaction_count), countTarget: d.interaction_count, subtext: 'acercamientos, tomas y devoluciones', badge: `${d.people_count > 0 ? (d.interaction_count / d.people_count).toFixed(1) : '0'} / pers`, tone: 'info', barColor: '#1F6C9F', progressPercent: interactionRateVal, tooltip: 'Eventos donde un cliente se detuvo dentro de la zona de atención de la góndola.' })}
       ${metricCard({ id: mid('pick-up-count'), icono: 'hand-grabbing', title: 'Pick-ups', value: formatNumber(d.pick_up_count), countTarget: d.pick_up_count, subtext: 'productos tomados', badge: 'Extracción', tone: 'accent', barColor: '#1F6C9F', progressPercent: pickUpProgress, tooltip: 'Veces que la mano de un cliente tomó un producto de la góndola según el modelo de interacción.' })}
       ${metricCard({ id: mid('put-back-count'), icono: 'arrow-u-down-left', title: 'Put-backs', value: formatNumber(d.put_back_count), countTarget: d.put_back_count, subtext: 'devoluciones', badge: d.put_back_count === 0 ? '0 devueltos' : `${d.put_back_count} reposiciones`, tone: d.put_back_count === 0 ? 'accent' : 'danger', barColor: '#9F2F2D', progressPercent: putBackProgress, tooltip: 'Veces que un producto previamente levantado fue colocado nuevamente en la góndola.' })}
-      ${metricCard({ id: mid('rejection-rate'), icono: 'gauge', title: 'Tasa Rechazo', value: rejection.label, subtext: rejection.rate === null ? 'sin tomas' : 'devolución', badge: rejection.rate === null ? 'N/A' : (rejection.rate > 0.3 ? 'Atención' : 'Óptimo'), tone: rejection.rate === null ? 'neutral' : (rejection.rate > 0.3 ? 'danger' : 'accent'), barColor: rejection.rate && rejection.rate > 0.3 ? '#9F2F2D' : '#346538', progressPercent: rejection.rate ? Math.round(rejection.rate * 100) : 0, tooltip: 'Relación de productos devueltos frente al total de productos tomados. Un valor alto sugiere problemas de precio, empaque o fecha de caducidad.' })}
+      ${metricCard({ id: mid('rejection-rate'), icono: 'gauge', title: 'Tasa Rechazo', value: rejection.label, subtext: rejection.rate === null ? 'sin tomas' : 'devolución', badge: rejection.rate === null ? 'N/A' : (rejection.muestraCorta ? 'Muestra corta' : (rejection.rate > 0.3 ? 'Atención' : 'Óptimo')), tone: (rejection.rate === null || rejection.muestraCorta) ? 'neutral' : (rejection.rate > 0.3 ? 'danger' : 'accent'), barColor: rejection.rate && rejection.rate > 0.3 ? '#9F2F2D' : '#346538', progressPercent: rejection.rate ? Math.round(rejection.rate * 100) : 0, tooltip: 'Relación de productos devueltos frente al total de productos tomados. Un valor alto sugiere problemas de precio, empaque o fecha de caducidad. Ojo: PICK_UP y PUT_BACK no se miden, se infieren de una convención (el primer alcance de una visita cuenta como toma, el segundo como devolución) -una caja no distingue una mano vacía de una con producto-. Por eso un video corto donde nadie alcanza el estante dos veces da 0% de rechazo: es coherente, no es que nadie haya devuelto nada.' })}
       ${metricCard({ id: mid('dwell-time'), icono: 'timer', title: 'Permanencia Media', value: formatDwellTime(d.average_dwell_time_s), subtext: 'avg dwell', badge: 'Atención', tone: 'warning', highlight: true, barColor: '#B8790B', progressPercent: dwellProgress, tooltip: 'Tiempo promedio en segundos que las personas permanecieron frente al expositor durante su visita.' })}
     </div>
   </section>`;
@@ -132,7 +132,7 @@ function renderZonesSection(bundle = bundleDe(), idPrefix = '') {
           <span class="font-semibold text-[#7F2523]">${formatNumber(z.put_back_count)}</span>
         </td>
         <td class="px-4 py-3.5 text-center text-xs font-mono text-[#787774]">${formatDwellTime(z.average_dwell_time_s)}</td>
-        <td class="px-5 py-3.5 text-right font-semibold text-[#1F6C9F]">${z.conversion_rate !== null ? formatPercentage(z.conversion_rate) : '—'}</td>
+        <td class="px-5 py-3.5 text-right font-semibold text-[#1F6C9F]">${z.conversion_rate !== null ? formatPercentage(z.conversion_rate) : SIN_DATO}</td>
       </tr>`;
     }).join('');
 
@@ -144,7 +144,7 @@ function renderZonesSection(bundle = bundleDe(), idPrefix = '') {
             <tr>
               <th class="px-5 py-3 font-semibold whitespace-nowrap">Zona / Estantería</th>
               <th class="px-4 py-3 font-semibold whitespace-nowrap">Categoría</th>
-              <th class="px-4 py-3 font-semibold text-center whitespace-nowrap">Personas</th>
+              <th class="px-4 py-3 font-semibold text-center whitespace-nowrap" title="Personas distintas que ENTRARON a esta zona. Es un subconjunto del Trafico Total de arriba, que cuenta todo el encuadre.">Personas<br><span class="normal-case font-normal tracking-normal text-[9px] opacity-70">en esta zona</span></th>
               <th class="px-4 py-3 font-semibold text-center whitespace-nowrap">Interacción %</th>
               <th class="px-4 py-3 font-semibold text-center whitespace-nowrap">Tomas / Devol.</th>
               <th class="px-4 py-3 font-semibold text-center whitespace-nowrap">Permanencia</th>
@@ -311,30 +311,23 @@ const HEATMAP_ESTILOS = {
 // entrada mas abajo).
 const HUELLA_MAPA = {};
 
-// Silueta de la gondola de fondo: un rectangulo por estante (su floor_zone,
-// ver GET /videos/{id}/zones/geometry en backend/api.py) con las mismas dos
-// lineas horizontales de "estante con niveles" que dibuja el render
-// 'privacy' del AI Service sobre el video anonimizado (ver
-// _dibujar_lineas_estante en ai-service/gondola/video/render.py) -mismo
-// color BLANCO (235,235,235) que usa ese modulo, mismos dos tercios de
-// altura para las lineas-. Sin esto los puntos del mapa flotaban sobre un
-// rectangulo negro liso, sin ninguna referencia de a que estante
-// corresponde cada mancha de densidad.
+// Huella de lo ULTIMO que se pinto en cada contenedor, para no repintar el
+// canvas cuando nada cambio (ver pintarHeatmap). Distinta de HUELLA_MAPA,
+// que solo decide si toca repetir la animacion de barrido.
+const HUELLA_PINTADO = {};
+
+// Silueta de la gondola: un rectangulo por estante (su floor_zone, de
+// GET /videos/{id}/zones/geometry) con las mismas lineas y el mismo blanco
+// que dibuja `_dibujar_lineas_estante` en el render del AI Service. Sin
+// esto, las manchas del mapa flotaban sobre un rectangulo negro liso, sin
+// forma de saber a que estante corresponde cada una.
 //
-// SVG, no <canvas>: es una capa fija que no cambia entre frames (a
-// diferencia del mapa de calor, que si repinta), y un SVG se mantiene nitido
-// a cualquier zoom sin recalcular nada a mano -mismo criterio que el resto
-// del dashboard (ver el comentario de renderPantallaInicio en
-// vista-modales.js: HTML/SVG de verdad, no pixeles-.
+// SVG y no <canvas>: es una capa fija que no repinta entre frames, y se
+// mantiene nitida a cualquier zoom sin recalcular nada.
 //
-// Se agrega DESPUES de heatmap.js (ver pintarHeatmap, mas abajo), no antes:
-// alguien que no conoce el proyecto veia una mancha roja y no tenia forma
-// de saber a que estante correspondia -pedido explicito, "que muestre que
-// parte de la estanteria es"-. El nombre necesita quedar LEGIBLE encima de
-// la mancha, no debajo, y por eso cada etiqueta lleva un chip solido detras
-// del texto (mismo mecanismo que `_dibujar_zonas` en
-// ai-service/gondola/video/render.py: un rectangulo de color solido antes
-// del texto, no texto suelto sobre lo que sea que haya debajo).
+// Se agrega DESPUES del canvas de heatmap.js, no antes, y cada etiqueta
+// lleva un chip solido detras: el nombre tiene que quedar legible ENCIMA de
+// la mancha aunque el punto mas caliente caiga justo ahi.
 function _dibujarSiluetaGondola(container, geometry) {
   if (!geometry || !geometry.shelves || !geometry.shelves.length) return;
   if (!geometry.frame_width || !geometry.frame_height) return;
@@ -423,6 +416,35 @@ function pintarHeatmap(containerId, positions, zonesGeometry) {
   const frameWidth = Number(container.dataset.frameWidth);
   const frameHeight = Number(container.dataset.frameHeight);
   if (!frameWidth || !frameHeight || !container.clientWidth) return;
+
+  // Repintar SOLO si algo cambio de verdad. render() reemplaza #root entero
+  // y vuelve a llamar aqui, y esta funcion arranca con
+  // `container.innerHTML = ''`: el canvas se borraba y se rehacia en cada
+  // vuelta. Mientras se sube un video eso pasa cada 2 segundos -el sondeo
+  // del trabajo actualiza el progreso y dispara un render-, y el mapa
+  // detras del modal parpadeaba a ese ritmo (bug real, reportado con
+  // captura). La huella lleva todo lo que cambia el dibujo: los datos, el
+  // estilo elegido, el tamano del contenedor (cambia al imprimir, ver
+  // exportarReportePDF) y si ya hay silueta de zonas o todavia no llego.
+  // El primer y el ultimo punto entran en la huella ademas del total: dos
+  // videos distintos pueden tener el mismo numero de posiciones, y sin esto
+  // cambiar de video dejaba el mapa del anterior en pantalla.
+  const primero = positions[0] || {};
+  const ultimo = positions[positions.length - 1] || {};
+  const huellaPintado = [
+    positions.length, primero.x, primero.y, ultimo.x, ultimo.y,
+    state.heatmapStyle, container.clientWidth, container.clientHeight,
+    (zonesGeometry && zonesGeometry.shelves || []).length,
+  ].join('|');
+  // `querySelector('canvas')`, NO `firstChild`: el contenedor viene del
+  // HTML con un salto de linea dentro, asi que `firstChild` es un NODO DE
+  // TEXTO y siempre da verdadero -con eso la guarda cortaba el repintado
+  // aunque el lienzo estuviera vacio, y el mapa no salia nunca (bug real,
+  // introducido al arreglar el parpadeo y encontrado probando la pagina
+  // con el navegador). Lo que tiene que existir para dar el mapa por
+  // pintado es el <canvas> de heatmap.js, no cualquier nodo.
+  if (HUELLA_PINTADO[containerId] === huellaPintado && container.querySelector('canvas')) return;
+  HUELLA_PINTADO[containerId] = huellaPintado;
 
   container.innerHTML = '';
   const estilo = HEATMAP_ESTILOS[state.heatmapStyle] || HEATMAP_ESTILOS.contraste;
@@ -519,20 +541,37 @@ function renderZonesHeatmap(bundle = bundleDe()) {
   });
 
   const maxPeople = Math.max(1, ...zones.map((z) => (metricsById[z.zone_id] || {}).people_count || 0));
+
+  // La rampa entera es lo bastante oscura para llevar SIEMPRE texto blanco.
+  //
+  // Antes arrancaba en un azul casi blanco (#D6E8F5) y hubo que ir por dos
+  // caminos malos seguidos: primero texto blanco fijo -y el estante MENOS
+  // visitado salia blanco sobre blanco, justo la fila que mas importa leer,
+  // la que dice que a ese estante no lo mira nadie-, y despues eligiendo el
+  // color del texto por luminancia, que arreglaba la legibilidad pero dejaba
+  // la tabla con unas filas en negro y otras en blanco (se ve desordenado, y
+  // el cambio de color se lee como si significara algo que no significa).
+  //
+  // La solucion es mover la RAMPA, no el texto. Estos tres tonos dan, con
+  // texto blanco encima, un contraste WCAG de 5.45:1, 8.62:1 y 14.15:1 -el
+  // minimo para texto pequeño es 4.5:1, asi que el peor caso ya sobra-. El
+  // gradiente de la leyenda (mas abajo, "Menos ... Mas") usa estos mismos
+  // tres colores: si cambias uno, cambia el otro o la leyenda miente.
   const heatColor = (people) => {
     const t = Math.max(0, Math.min(1, people / maxPeople));
     const stops = t < 0.5
-      ? [[214, 232, 245], [93, 155, 201], t / 0.5]
-      : [[93, 155, 201], [11, 59, 92], (t - 0.5) / 0.5];
+      ? [[58, 110, 150], [33, 79, 116], t / 0.5]
+      : [[33, 79, 116], [8, 45, 74], (t - 0.5) / 0.5];
     const [a, b, local] = stops;
-    const rgb = a.map((v, i) => Math.round(v + (b[i] - v) * local));
-    return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    const [r, g, bl] = a.map((v, i) => Math.round(v + (b[i] - v) * local));
+    return { bg: `rgb(${r},${g},${bl})`, fg: '#FFFFFF' };
   };
 
   const shelfRow = (s) => {
     const m = metricsById[s.zone_id] || {};
+    const { bg, fg } = heatColor(m.people_count || 0);
     return `
-    <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 rounded px-3 py-2.5 mb-2 text-white text-xs" style="background:${heatColor(m.people_count || 0)}">
+    <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 rounded px-3 py-2.5 mb-2 text-xs" style="background:${bg};color:${fg}">
       <span class="font-semibold leading-snug">${esc(s.name)}</span>
       <span class="font-mono text-[11px] opacity-90 sm:ml-auto sm:text-right whitespace-nowrap">${formatNumber(m.people_count || 0)} pers · ${formatNumber(m.interaction_count || 0)} interac · ${formatDwellTime(m.average_dwell_time_s)}</span>
     </div>`;
@@ -590,12 +629,12 @@ function renderZonesHeatmap(bundle = bundleDe()) {
         <div class="flex items-center gap-2.5 min-w-0">
           <div class="w-7 h-7 rounded-lg bg-[#F3F2EF] text-[#787774] flex items-center justify-center shrink-0">${icon('map', 'w-4 h-4')}</div>
           <div class="min-w-0">
-            <h3 class="text-sm font-bold text-[#111111] inline-flex items-center gap-1.5">Resumen por Zona ${infoButton('Resumen por Zona', 'El color de cada estante sale de comparar su people_count contra el estante MÁS visitado del mismo video -no contra un umbral fijo-, así que "rojo" en un video con poco tráfico no significa lo mismo que "rojo" en uno con mucho. Los números (personas, interacciones, permanencia) vienen de la tabla metrics ya calculada por el pipeline, agregada por góndola y por estante.')}</h3>
+            <h3 class="text-sm font-bold text-[#111111] inline-flex items-center gap-1.5">Resumen por Zona ${infoButton('Resumen por Zona', 'El color de cada estante sale de comparar su people_count contra el estante MÁS visitado del mismo video -no contra un umbral fijo-, así que "rojo" en un video con poco tráfico no significa lo mismo que "rojo" en uno con mucho. Los números (personas, interacciones, permanencia) vienen de la tabla metrics ya calculada por el pipeline, agregada por góndola y por estante. OJO CON SUMAR: los estantes pueden sumar MÁS personas que la góndola, y no es un error. Una misma persona que mira el estante 1 y después el estante 2 cuenta en los dos, pero en la góndola cuenta UNA vez -es un conteo de personas distintas, no una suma de filas-.')}</h3>
             <p class="text-[11px] text-[#787774]">Total agregado por góndola/estante — el mapa de calor por coordenadas está arriba</p>
           </div>
         </div>
         <div class="flex items-center gap-1.5 text-[10px] text-[#787774] shrink-0 whitespace-nowrap">
-          <span>Menos</span><div class="w-24 h-2 rounded shrink-0" style="background:linear-gradient(90deg,#D6E8F5,#5D9BC9,#0B3B5C)"></div><span>Más</span>
+          <span>Menos</span><div class="w-24 h-2 rounded shrink-0" style="background:linear-gradient(90deg,#3A6E96,#214F74,#082D4A)"></div><span>Más</span>
         </div>
       </div>
       <div class="${debeAnimarSeccion('zonas') ? 'stagger-in' : ''} grid gap-3.5 mt-3 ${gondolas.length > 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}">${gondolas.map(gondolaCard).join('')}</div>
@@ -710,27 +749,37 @@ function renderInsights(bundle = bundleDe()) {
 }
 
 function renderSidebar() {
-  let rejectionRate = '0.0';
-  let rejectionDesc = 'No se han registrado devoluciones a estantería tras toma de producto en este intervalo.';
-  if (state.videoDetail && state.videoDetail.total_pick_ups !== 0) {
-    const d = state.videoDetail;
-    if (d.pick_up_count > 0) {
-      const rate = (d.put_back_count / d.pick_up_count) * 100;
-      rejectionRate = rate.toFixed(1);
-      rejectionDesc = d.put_back_count === 0
+  // Esta tarjeta y la de "Tasa Rechazo" del resumen muestran EL MISMO dato,
+  // asi que salen del MISMO calculo (calculateRejectionRate, en utils.js).
+  // Antes esta llevaba su propia cuenta y, sin ninguna toma registrada,
+  // pintaba un "0.0%" enorme mientras la otra decia "Sin datos": dos cifras
+  // distintas para lo mismo, en la misma pantalla. Un 0% afirma que se midio
+  // y no hubo devoluciones; sin denominador eso no se puede afirmar.
+  //
+  // (De paso desaparece una condicion que nunca hacia nada: comprobaba
+  // `total_pick_ups`, un campo que la API no devuelve -el suyo se llama
+  // `pick_up_count`-, asi que siempre valia undefined y la comparacion
+  // siempre daba true.)
+  const d = state.videoDetail;
+  const rechazo = d
+    ? calculateRejectionRate(d.put_back_count, d.pick_up_count)
+    : { rate: null, label: SIN_DATO, explanation: 'Sin datos suficientes' };
+  const hayTasa = rechazo.rate !== null;
+  const rejectionRate = rechazo.label;
+  const rejectionDesc = !hayTasa
+    ? 'No hay ninguna toma de producto registrada, así que no hay con qué calcular una tasa de rechazo. No es 0%: es un dato ausente.'
+    : (d.put_back_count === 0
         ? 'Retención óptima: 100% de los productos tomados fueron conservados sin devoluciones a góndola.'
-        : `${d.put_back_count} de ${d.pick_up_count} productos tomados fueron devueltos a la estantería.`;
-    }
-  }
+        : `${d.put_back_count} de ${d.pick_up_count} productos tomados fueron devueltos a la estantería.`);
 
   return `
   <div class="bg-[#2A2E31] text-white p-5 rounded-xl relative overflow-hidden shadow-xs border border-[#3A3F42]">
     <div class="relative z-10">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-xs font-bold uppercase tracking-widest text-[#A8A29E] inline-flex items-center gap-1.5">Tasa de Rechazo Global ${infoButton('Tasa de Rechazo Global', 'put_back_count ÷ pick_up_count de todo el video, en porcentaje. Sin ninguna toma detectada (pick_up_count = 0) esta tarjeta muestra 0.0% por defecto, pero eso NO es lo mismo que "0% de rechazo real": es un dato ausente, no una tasa calculada -ver la tarjeta de Retroalimentación para esa aclaración con los números concretos de este video.')}</h3>
+        <h3 class="text-xs font-bold uppercase tracking-widest text-[#A8A29E] inline-flex items-center gap-1.5">Tasa de Rechazo Global ${infoButton('Tasa de Rechazo Global', 'put_back_count ÷ pick_up_count de todo el video, en porcentaje. Sin ninguna toma detectada (pick_up_count = 0) no hay denominador, así que esta tarjeta dice "Sin datos" en vez de 0.0%: un dato ausente no es lo mismo que un cero medido. Ver la tarjeta de Retroalimentación para los números concretos de este video.')}</h3>
         <span class="text-[10px] font-mono text-[#A8A29E] px-1.5 py-0.5 rounded bg-white/10">PUT-BACKS</span>
       </div>
-      <div class="text-3xl sm:text-4xl font-bold mb-2 tracking-tight text-[#E5E3DE]">${rejectionRate}<span class="text-lg opacity-50 font-normal">%</span></div>
+      <div class="${hayTasa ? 'text-3xl sm:text-4xl' : 'text-xl sm:text-2xl'} font-bold mb-2 tracking-tight text-[#E5E3DE]">${rejectionRate}${hayTasa ? '<span class="text-lg opacity-50 font-normal">%</span>' : ''}</div>
       <p class="text-xs text-[#A8A29E] leading-relaxed">${esc(rejectionDesc)}</p>
     </div>
   </div>

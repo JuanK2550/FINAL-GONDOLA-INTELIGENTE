@@ -88,28 +88,19 @@ function renderInfoModal() {
   </div>`;
 }
 
-// Portada de bienvenida: que se ve esta pagina, que puede hacer, con que
-// esta hecha -"muy por encimita", nada tecnico a fondo- y el logo en el
-// centro. Vive fuera del <main> normal a proposito: es su propia pantalla
-// completa, sin la barra de navegacion ni el resto del dashboard detras.
-// Portada. Es el unico momento "de convencer" de todo el producto -lo
-// primero que ve un jurado-, asi que no sigue las reglas del panel: aqui
-// la composicion manda sobre la densidad.
+// Portada: su propia pantalla completa, fuera del <main>, sin la barra de
+// navegacion ni el dashboard detras. Es el unico momento "de convencer" del
+// producto -lo primero que ve un jurado-, asi que no sigue las reglas de
+// densidad del panel: aqui manda la composicion. Va SIEMPRE oscura, sin
+// seguir el interruptor de tema (ver seccion 7 de css/estilos.css).
 //
-// Antes era una pila vertical de tarjetas del mismo tamano (ilustracion,
-// lista, nota) sobre fondo. Ahora es una sola composicion a dos columnas
-// en escritorio: el argumento y la accion a la izquierda, el diagrama -que
-// ES la idea del producto: nunca un rostro, solo un punto en el piso- con
-// el peso visual que merece a la derecha. En movil vuelve a una columna.
-// Portada. Es el unico momento "de convencer" de todo el producto -lo
-// primero que ve un jurado-, asi que no sigue las reglas del panel: aqui
-// manda la composicion sobre la densidad, y va SIEMPRE oscura, sin seguir
-// el interruptor de tema (ver la seccion 7 de css/estilos.css).
+// Dos columnas en escritorio (argumento y accion a la izquierda, el
+// diagrama a la derecha), una sola en movil. El diagrama ES la idea del
+// producto: nunca un rostro, solo un punto en el piso.
 //
 // La fotografia (assets/hero-gondola.jpg) es un recorte del mockup del
-// equipo: solo la escena, sin el texto que traia quemado encima. Todo lo
-// que se lee aqui es HTML de verdad -nitido a cualquier zoom,
-// seleccionable, traducible y accesible-, no pixeles de una imagen.
+// equipo, sin el texto que traia quemado encima: todo lo que se lee aqui es
+// HTML de verdad -nitido a cualquier zoom, seleccionable y accesible-.
 function renderPantallaInicio() {
   // Las cuatro capacidades REALES del sistema. El mockup mostraba seis
   // tarjetas, pero dos repetian el texto de otras dos (un defecto de la

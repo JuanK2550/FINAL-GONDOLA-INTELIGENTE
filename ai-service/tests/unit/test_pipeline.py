@@ -26,7 +26,7 @@ def cfg(tmp_path):
     return load_config(
         env={
             "VIDEO_ID": "video_001",
-            "VIDEO_PATH": str(tmp_path / "videos" / "scapder.mp4"),
+            "VIDEO_PATH": str(tmp_path / "videos" / "video_001.mp4"),
             "OUTPUT_DIR": str(tmp_path / "output"),
         }
     )

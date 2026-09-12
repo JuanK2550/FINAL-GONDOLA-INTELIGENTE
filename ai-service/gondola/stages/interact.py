@@ -1,129 +1,66 @@
 """Etapa 4: interaccion con productos. Responsable: Persona 5.
 
-QUE HACE
---------
-Lee los eventos ya ubicados por la Persona 4 (`<video>.zones.jsonl`, con
-`zone` y `metrics.dwell_time` rellenos) y rellena SOLO `interaction`
-(`event` y `product_zone`). No toca `detection`, ni `track_id`, ni `zone`, ni
-`metrics.dwell_time`: los copia tal cual.
-
-El archivo de salida conserva TODOS los eventos de entrada, no solo los que
-interactuaron. La Persona 6 necesita `zone` y `dwell_time` de todos para
-contar personas y permanencia; los eventos sin interaccion salen con
-`interaction.event = null`, que es lo que ya asume `eventos_detectados()` en
-`gondola/evaluate/evaluator.py`.
+Lee `<video>.zones.jsonl` y rellena SOLO `interaction`. Todo lo demas se
+copia tal cual, y salen TODOS los eventos, no solo los que interactuaron:
+la Persona 6 necesita `zone` y `dwell_time` de todos.
 
 COMO SE DECIDE QUE ALGUIEN ALCANZO EL ESTANTE
----------------------------------------------
-Reglas geometricas sobre la caja, sin pose estimation (decision del lider,
-ver `docs/interact-fase1-diseno.md` seccion 3). El rasgo es el ASPECTO de la
-caja, `width / height`, comparado contra la mediana movil del PROPIO track:
+----------------------------------------------
+Geometria de la caja, sin pose estimation. El rasgo es el aspecto
+(`width / height`) comparado contra la mediana movil del PROPIO track:
 
     razon = aspecto_actual / mediana_movil_del_track
 
-Cuando alguien estira el brazo hacia el estante, la caja se ensancha sin
-crecer de alto: la razon sube. Normalizar contra la mediana del propio track
--y no contra un numero fijo- es lo que absorbe el cambio lento de escala
-cuando la persona se acerca o se aleja de la camara.
+Estirar el brazo ensancha la caja sin subirla, asi que la razon sube.
+Normalizar contra la mediana del track -no contra un numero fijo- absorbe
+el cambio de escala cuando la persona se acerca o se aleja de la camara.
 
-Un EPISODIO es una racha de muestras consecutivas del mismo track con
-`razon >= UMBRAL_RAZON_ASPECTO`. Cada episodio pasa por cinco filtros (en
-este orden, que es el que determina a que filtro se le atribuye el descarte
-en el resumen final):
+Un EPISODIO es una racha con `razon >= UMBRAL_RAZON_ASPECTO`. Pasa cinco
+filtros EN ESTE ORDEN (el orden decide a que filtro se le atribuye el
+descarte en el resumen): borde, duracion, pies quietos, zona, refractario.
+El que sobrevive produce UN evento, en el frame del pico.
 
-    1. borde       ninguna caja del episodio toca el borde del frame
-    2. duracion    dura al menos DURACION_MINIMA_S
-    3. pies        los pies se quedaron quietos mientras duro
-    4. zona        el pico cayo dentro de alguna zona (si no, no hay estante)
-    5. refractario no hay otro evento de ese track en el ultimo REFRACTARIO_S
+DOS COSAS QUE HAY QUE SABER ANTES DE TOCAR NADA
+------------------------------------------------
+1. LOS UMBRALES VAN EN ALTURAS DE CAJA, no en pixeles: "0,3 alturas por
+   segundo" transfiere a otra camara, "40 px/s" no. Mismo criterio que
+   `track`, que mide en segundos y no en frames.
 
-El que sobrevive produce UN SOLO evento, en el frame del PICO (maximo
-aspecto, desempate por numero de frame menor). Ver `pico_del_episodio`.
+2. HACE FALTA UNA VENTANA DE LATENCIA. Decidir el pico exige haber visto
+   los frames siguientes, pero `verify` exige que los frames no retrocedan.
+   Se resuelve con una cola FIFO de LATENCIA_S segundos: entran, se deciden
+   cuando el reloj ya paso de largo, y salen en el mismo orden.
 
-POR QUE LOS UMBRALES VAN EN ALTURAS DE CAJA Y NO EN PIXELES
------------------------------------------------------------
-"Pies quietos por debajo de 40 px/s" no transfiere a otra camara ni a otra
-resolucion; "por debajo de 0,3 alturas de caja por segundo" si. Es el mismo
-espiritu por el que `track` mide en segundos y no en frames. Cada constante
-de abajo lleva al lado de donde salio su valor inicial: todas vienen de las
-mediciones de la fase 1 sobre `video_001` (3.801 eventos, 16 tracks, 920x680
-a 30 fps, 205 s), documentadas en `docs/interact-fase1-diseno.md` seccion 2.
+EL TECHO DEL METODO
+--------------------
+La mediana esta CENTRADA, asi que cuando un gesto ocupa mas de la MITAD de
+la ventana se vuelve su propia linea base: la razon cae a 1,0 y el episodio
+se cierra solo. El metodo solo ve gestos de menos de ~MEDIA_VENTANA_S.
 
-NINGUNO ESTA VALIDADO CONTRA GROUNDTRUTH. Son puntos de partida razonados a
-partir del ruido medido. La calibracion real espera a que haya video anotado
-en `data/groundtruth/` (ver CLAUDE.md); hasta entonces no se ajustan "a ojo"
-mirando el video, porque eso es sobreajustar a un clip sin forma de saberlo.
+Por eso VENTANA_MEDIANA_S=4,0 s (techo ~2,0 s) y no 1,0 s: las etiquetas
+oficiales del MERL Shopping Dataset dan 167 gestos reales de 0,43 a 3,50 s
+(mediana 1,27 s), y con la ventana vieja el metodo era ciego a un gesto
+normal. Subirla tampoco es gratis -mete en la linea base el cambio de
+escala que la mediana esta ahi para absorber-, y 4,0 s es el maximo local
+del barrido. El detalle completo, con la tabla de precision/recall, esta en
+`docs/interact-evaluacion-merl.md`; el diseno original, en
+`docs/interact-fase1-diseno.md`.
 
-EXCEPCION: VENTANA_MEDIANA_S y LATENCIA_S. Estas dos SI se recalibraron, y SI
-hay groundtruth detras: las etiquetas oficiales del MERL Shopping Dataset
-para los 5 clips `video_demo_merl_*` que ya usa este proyecto. No es "mirar
-el video y ajustar" -es contar, con las anotaciones de terceros, cuanto dura
-de verdad un gesto real, y comparar ese numero contra lo que el metodo podia
-ver-. Ver el detalle en el docstring de cada constante.
+El RESTO de constantes NO esta validado contra groundtruth: son puntos de
+partida razonados sobre el ruido medido en la fase 1. No se ajustan "a ojo"
+mirando el video, que es sobreajustar a un clip sin forma de saberlo.
 
-POR QUE ESTO NECESITA UNA VENTANA DE LATENCIA
-----------------------------------------------
-Decidir "este evento es el pico del episodio" exige haber visto los frames
-que vienen DESPUES, y la mediana centrada necesita media ventana de adelanto.
-Pero `verify` comprueba que los numeros de frame no retrocedan, asi que la
-salida tiene que ir en el mismo orden que la entrada.
-
-La solucion es una cola FIFO con retardo fijo de LATENCIA_S segundos de
-video: los eventos entran, se deciden cuando el reloj de entrada ya paso de
-largo, y salen por el mismo lado y en el mismo orden en que llegaron. En
-memoria vive solo esa ventana por track activo, nunca el archivo completo
-(ver `_procesar`).
-
-Lo unico que puede retener la cola mas alla de LATENCIA_S es un episodio
-abierto, y su duracion la acota la propia mediana centrada: ver el techo de
-aqui abajo. No hace falta ningun tope de duracion aparte -se probo y no se
-alcanzaba nunca-, y por eso no existe.
-
-EL TECHO DEL METODO: UN GESTO LARGO SE VUELVE SU PROPIA LINEA BASE
-------------------------------------------------------------------
-La mediana esta CENTRADA en cada muestra, asi que la ventana de
-+-MEDIA_VENTANA_S mira por igual hacia atras y hacia delante. En cuanto el
-gesto ocupa mas de la MITAD de la ventana, la mayoria de las muestras que la
-componen son del propio gesto: la mediana sube hasta el, la razon vuelve a
-1,0 y el episodio se cierra solo. En la practica el metodo solo ve gestos de
-menos de ~MEDIA_VENTANA_S segundos.
-
-RECALIBRADO CONTRA GROUNDTRUTH REAL (no "a ojo"): la fase 1 solo tenia
-`video_001` sin anotar, y con VENTANA_MEDIANA_S=1,0 s (techo ~0,5 s) el
-metodo era ciego a un gesto real de tomar un producto, que mide 0,5-1,5 s.
-Las etiquetas oficiales del MERL Shopping Dataset (`Reach To Shelf` +
-`Retract From Shelf`, ya disponibles para los 5 clips que este proyecto usa
-como `video_demo_merl_*`) dan 167 gestos reales medidos: 0,43-3,50 s,
-mediana 1,27 s, p75 1,63 s, p90 1,95 s, NINGUNO por debajo de 0,3 s. Contra
-esa evidencia, VENTANA_MEDIANA_S subio a 4,0 s (techo ~2,0 s): cubre la
-mediana con margen (2,0/1,27 = 1,6x) y se acerca al p75 sin perseguir la
-cola larga (p90), que exigiria una ventana tan ancha que la mediana dejaria
-de absorber el acercamiento a camara (ver parrafo siguiente). LATENCIA_S
-subio en la misma proporcion para seguir cubriendo MEDIA_VENTANA_S mas el
-margen de cierre de episodio. Ver
-`tests/unit/test_interact.py::test_la_ventana_de_mediana_sigue_siendo_la_recalibrada_con_merl`
-y el comentario de cada constante para el detalle numerico.
-
-Tambien explica por que subir VENTANA_MEDIANA_S no es gratis: alarga el techo
-pero mete en la linea base el cambio de escala que la mediana estaba ahi para
-absorber. 4,0 s es el punto donde eso ya se puede pagar: sigue siendo mas
-corto que "acercarse caminando a la gondola" en los videos medidos, pero ya
-cubre la mayoria de los gestos reales.
-
-LO QUE ESTE ENFOQUE NO PUEDE HACER (resumido; el detalle, en la seccion 5 del
-documento de diseno)
---------------------------------------------------------------------------
-- No distingue fisicamente PICK_UP de PUT_BACK: es el mismo gesto y lo unico
-  que cambia es que hay en la mano. Se trata con la CONVENCION de
-  `etiqueta_de_alcance`, y de ahi cuelga la tasa de rechazo de la Persona 6.
-- Un giro del cuerpo de perfil a frontal ensancha la caja exactamente igual
-  que estirar el brazo. Es el falso positivo dominante.
+LO QUE ESTE ENFOQUE NO PUEDE HACER
+-----------------------------------
+- No distingue PICK_UP de PUT_BACK: es el mismo gesto y solo cambia que hay
+  en la mano. Se resuelve con la CONVENCION de `etiqueta_de_alcance`, y de
+  ahi cuelga la tasa de rechazo de la Persona 6.
+- Un giro de perfil a frontal ensancha la caja igual que estirar el brazo:
+  es el falso positivo dominante.
 - Un brazo ocluido no cambia la caja: falso negativo sin huella medible.
 - Si `track` fragmenta una visita, la convencion de emparejamiento se rompe.
-- Un hueco de deteccion dentro de un episodio (la persona desaparece un par
-  de frames) no lo parte, y su duracion sale inflada. La unica cota es la
-  ventana de latencia: un hueco mas largo que LATENCIA_S si parte el
-  episodio en dos.
+- Un hueco de deteccion dentro de un episodio no lo parte y su duracion sale
+  inflada; solo lo corta un hueco mas largo que LATENCIA_S.
 """
 
 from __future__ import annotations
@@ -940,8 +877,68 @@ def _color_de_interaccion(evento: Event, momentos_por_track: dict) -> tuple[int,
     return _COLOR_POR_INTERACCION[tipo]
 
 
+PRESENCIA_MINIMA_S = 1.0
+"""Segundos que una silueta tiene que durar para DIBUJARSE como persona.
+
+Mismo criterio y mismo valor que `PRESENCIA_MINIMA_S` en
+`gondola/stages/metrics.py` -ahi esta de donde sale el numero, medido sobre
+los tracks reales de los seis videos-. Tiene que ser el mismo a proposito:
+si el video dibujara cajas que las metricas no cuentan, el jurado veria
+"Persona 23" en pantalla y "12 personas" en la tabla, sobre el mismo video.
+"""
+
+
+def _tracks_confirmados(eventos, minimo_s: float = PRESENCIA_MINIMA_S) -> set[int]:
+    """Los `track_id` que se vieron al menos `minimo_s` segundos.
+
+    El resto son parpadeos de la deteccion -una caja que aparece uno o dos
+    frames y desaparece-, no gente. No se dibujan: una caja con nombre
+    propio sobre algo que el sistema no puede confirmar que sea una persona
+    dice mas de lo que el sistema sabe.
+    """
+    primero: dict[int, float] = {}
+    ultimo: dict[int, float] = {}
+    for e in eventos:
+        if e.track_id is None:
+            continue
+        primero.setdefault(e.track_id, e.timestamp)
+        ultimo[e.track_id] = e.timestamp
+    return {tid for tid in primero if ultimo[tid] - primero[tid] >= minimo_s}
+
+
+def _numeros_para_mostrar(eventos, confirmados: set[int] | None = None) -> dict[int, int]:
+    """`track_id` -> el numero que se DIBUJA en el video (1, 2, 3...), en
+    orden de aparicion.
+
+    El `track_id` del contrato es un contador GLOBAL que solo sube: cada vez
+    que el seguimiento abre un track nuevo consume un numero, incluido uno
+    que vive dos frames y se descarta enseguida. Por eso en un video con una
+    sola persona se acababa viendo "Persona 7" mientras la cabecera decia
+    "personas: 1". No era un error de conteo: son dos cosas distintas -uno
+    es un identificador, el otro cuanta gente hay en ese frame- pero puestas
+    una al lado de la otra se leen como una contradiccion.
+
+    Con `confirmados` se numeran SOLO esos, asi que los numeros llegan hasta
+    cuanta gente hay de verdad y no hasta cuantos tracks se abrieron: un
+    video con ocho personas termina en "Persona 8", no en "Persona 28".
+
+    Aqui se renumera SOLO para dibujar, empezando en 1 y sin huecos. El
+    `track_id` del .jsonl no se toca: es campo del contrato y lo rellena la
+    Persona 3 (ver docs/data-contract.md).
+    """
+    numeros: dict[int, int] = {}
+    for e in eventos:
+        if e.track_id is None or e.track_id in numeros:
+            continue
+        if confirmados is not None and e.track_id not in confirmados:
+            continue
+        numeros[e.track_id] = len(numeros) + 1
+    return numeros
+
+
 def _etiqueta_de_interaccion(
     evento: Event, momentos_por_track: dict, nombres_por_zona: dict[tuple[str, str], str],
+    numeros_por_track: dict[int, int] | None = None,
 ) -> str:
     """"Persona 3 · Estante 2 · 12.4s" -o solo "Persona 3" si esta fuera de
     toda zona, que es cuando `zone.segment`/`metrics.dwell_time` son `None`
@@ -950,7 +947,8 @@ def _etiqueta_de_interaccion(
     partir del archivo de calibracion): `evento.zone.segment` es el slug
     interno ("estante_2"), no lo que alguien escribio en el dashboard al
     dibujar los estantes ("Estante 2", o el nombre que le haya puesto)."""
-    base = f"Persona {evento.track_id}"
+    numero = (numeros_por_track or {}).get(evento.track_id, evento.track_id)
+    base = f"Persona {numero}"
     if evento.zone.zone_id is not None and evento.zone.segment is not None:
         clave = (evento.zone.zone_id, evento.zone.segment)
         base += f" · {nombres_por_zona.get(clave, evento.zone.segment)}"
@@ -1070,11 +1068,22 @@ def _renderizar(cfg: Config, ruta_interact: Path, zonas: ZonesConfig) -> None:
     from gondola.video.render import Renderer
 
     eventos_ordenados = sorted(read_events(ruta_interact), key=lambda e: e.frame)
+
+    # Solo se DIBUJA a quien duro lo suficiente para ser una persona (ver
+    # _tracks_confirmados). Los eventos descartados siguen enteros en el
+    # .jsonl: esto filtra el video, no los datos.
+    confirmados = _tracks_confirmados(eventos_ordenados)
+    descartados = len({e.track_id for e in eventos_ordenados if e.track_id is not None}) - len(confirmados)
+    if descartados:
+        print(f"[interact] Render: {descartados} silueta(s) de menos de "
+              f"{PRESENCIA_MINIMA_S}s no se dibujan (parpadeos de deteccion)")
+
     grupos = [
-        (frame, list(grupo))
+        (frame, [e for e in grupo if e.track_id in confirmados])
         for frame, grupo in groupby(eventos_ordenados, key=lambda e: e.frame)
     ]
     momentos_por_track = _momentos_de_interaccion(eventos_ordenados)
+    numeros_por_track = _numeros_para_mostrar(eventos_ordenados, confirmados)
     n_momentos = sum(len(v) for v in momentos_por_track.values())
     print(f"[interact] Render: resaltando {n_momentos} interaccion(es) "
           f"con una ventana de +/-{VENTANA_RESALTADO_S}s cada una")
@@ -1117,7 +1126,7 @@ def _renderizar(cfg: Config, ruta_interact: Path, zonas: ZonesConfig) -> None:
                 renderer.write(
                     imagen, grupo, indice, timestamp,
                     color_de=lambda e: _color_de_interaccion(e, momentos_por_track),
-                    etiqueta_de=lambda e: _etiqueta_de_interaccion(e, momentos_por_track, nombres_por_zona),
+                    etiqueta_de=lambda e: _etiqueta_de_interaccion(e, momentos_por_track, nombres_por_zona, numeros_por_track),
                     estado_extra=f"¡{estado.value}!" if estado else None,
                     color_estado=_COLOR_POR_INTERACCION.get(estado) if estado else None,
                     productos=idx_pick_up,

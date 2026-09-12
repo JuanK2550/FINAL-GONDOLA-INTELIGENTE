@@ -59,12 +59,31 @@ class ZonaDibujo(NamedTuple):
 # DLLs -si no esta, VideoWriter.isOpened() sigue devolviendo True pero
 # escribe un archivo casi vacio sin avisar con una excepcion, por eso
 # 'python -m gondola doctor' tambien la revisa (ver cli.py)-.
+#
+# OJO CON COMO SE REGISTRA ESA CARPETA (bug real, medido)
+# --------------------------------------------------------
+# Aqui habia `os.add_dll_directory(...)` y NO ALCANZA. Esa funcion agrega la
+# carpeta a la lista de "directorios de usuario", que solo consultan las
+# cargas hechas con LoadLibraryEx + LOAD_LIBRARY_SEARCH_USER_DIRS -es decir,
+# lo que carga Python-. Quien pide esta DLL no es Python: es el FFmpeg que
+# vive dentro de OpenCV, y la pide con un LoadLibrary a secas, que NO mira
+# esa lista. Resultado: la DLL estaba en disco, `doctor` la veia, y aun asi
+# FFmpeg imprimia "Failed to load OpenH264 library" y se iba a un codec de
+# respaldo sin lanzar ninguna excepcion -los videos salian de 300 MB en vez
+# de ~20 MB, y sin la garantia de que un <video> de navegador los abra-.
+#
+# PATH si lo mira un LoadLibrary normal (es el ultimo sitio donde busca),
+# asi que anteponer la carpeta al PATH del proceso es lo que hace que
+# cargue de verdad. Se comprueba con el mensaje de Cisco en la salida:
+# "OpenH264 Video Codec provided by Cisco Systems, Inc.".
 if sys.platform == "win32":
     _CARPETA_MODELOS = Path(__file__).resolve().parents[3] / "data" / "models"
     if _CARPETA_MODELOS.is_dir():
         import os
 
         os.add_dll_directory(str(_CARPETA_MODELOS))
+        if str(_CARPETA_MODELOS) not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = str(_CARPETA_MODELOS) + os.pathsep + os.environ.get("PATH", "")
 
 # Colores en BGR, que es el orden que usa OpenCV.
 VERDE = (80, 220, 80)
@@ -299,7 +318,12 @@ class Renderer:
         PUT_BACK), y se queda en ese numero el resto del video -no son una
         ventana que desaparece, como `estado_extra`, mas abajo-."""
         cv2.rectangle(lienzo, (0, 0), (self.ancho, 34), (0, 0, 0), -1)
-        izquierda = f"frame {indice}   t={timestamp:6.2f}s   personas: {personas}"
+        # "en pantalla", no "personas" a secas: este numero es cuanta gente
+        # se ve EN ESTE FRAME, y al lado de una caja etiquetada "Persona 7"
+        # se leia como una contradiccion ("dice 1 persona pero la llama la
+        # 7"). No lo era -7 es la septima persona que aparece en el video,
+        # no la septima que hay ahora- pero el rotulo no lo dejaba claro.
+        izquierda = f"frame {indice}   t={timestamp:6.2f}s   en pantalla: {personas}"
         if interacciones is not None:
             izquierda += f"   interacciones: {interacciones}"
         if productos is not None:

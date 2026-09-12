@@ -42,7 +42,7 @@ ETAPAS_PENDIENTES = [e for e in STAGES if e.name not in ETAPAS_IMPLEMENTADAS]
 def entorno_limpio(tmp_path, monkeypatch):
     """Apunta la configuracion a carpetas temporales, sin tocar el .env real."""
     monkeypatch.setenv("VIDEO_ID", "video_001")
-    monkeypatch.setenv("VIDEO_PATH", str(tmp_path / "videos" / "scapder.mp4"))
+    monkeypatch.setenv("VIDEO_PATH", str(tmp_path / "videos" / "video_001.mp4"))
     monkeypatch.setenv("MODEL_PATH", str(tmp_path / "models" / "yolo11n.pt"))
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "output"))
     return tmp_path
@@ -101,7 +101,7 @@ def test_un_placeholder_con_su_entrada_lista_devuelve_error(etapa, entorno_limpi
 def _crear_entrada_de(etapa, tmp_path):
     """Crea el archivo (o el video falso) que esa etapa espera encontrar."""
     if etapa.input_suffix is None:
-        entrada = tmp_path / "videos" / "scapder.mp4"
+        entrada = tmp_path / "videos" / "video_001.mp4"
     else:
         entrada = tmp_path / "output" / f"video_001{etapa.input_suffix}"
     entrada.parent.mkdir(parents=True, exist_ok=True)
@@ -161,7 +161,7 @@ def test_run_dice_donde_paro_aunque_la_etapa_lance_una_excepcion(entorno_limpio,
     pero se perderia el mensaje de "la cadena se detiene en X".
     """
     pytest.importorskip("cv2")
-    video = entorno_limpio / "videos" / "scapder.mp4"
+    video = entorno_limpio / "videos" / "video_001.mp4"
     video.parent.mkdir(parents=True, exist_ok=True)
     video.write_text("esto no es un video", encoding="utf-8")
 
@@ -176,7 +176,7 @@ def test_run_dice_donde_paro_aunque_la_etapa_lance_una_excepcion(entorno_limpio,
 # --------------------------------------------------------------------------
 
 def test_purge_pide_confirmacion_y_no_borra_si_dices_que_no(entorno_limpio, monkeypatch, capsys):
-    video = entorno_limpio / "videos" / "scapder.mp4"
+    video = entorno_limpio / "videos" / "video_001.mp4"
     video.parent.mkdir(parents=True)
     video.write_text("contenido falso", encoding="utf-8")
 
@@ -187,7 +187,7 @@ def test_purge_pide_confirmacion_y_no_borra_si_dices_que_no(entorno_limpio, monk
 
 
 def test_purge_borra_cuando_confirmas(entorno_limpio, monkeypatch):
-    video = entorno_limpio / "videos" / "scapder.mp4"
+    video = entorno_limpio / "videos" / "video_001.mp4"
     video.parent.mkdir(parents=True)
     video.write_text("contenido falso", encoding="utf-8")
     salida = entorno_limpio / "output" / "video_001.detect.jsonl"
@@ -206,7 +206,7 @@ def test_purge_no_borra_los_readme(entorno_limpio, monkeypatch):
     carpeta.mkdir(parents=True)
     readme = carpeta / "README.md"
     readme.write_text("COLOCAR AQUI EL VIDEO", encoding="utf-8")
-    (carpeta / "scapder.mp4").write_text("falso", encoding="utf-8")
+    (carpeta / "video_001.mp4").write_text("falso", encoding="utf-8")
 
     monkeypatch.setattr("builtins.input", lambda _: "si")
     main(["purge"])
@@ -214,7 +214,7 @@ def test_purge_no_borra_los_readme(entorno_limpio, monkeypatch):
 
 
 def test_purge_con_yes_no_pregunta(entorno_limpio):
-    video = entorno_limpio / "videos" / "scapder.mp4"
+    video = entorno_limpio / "videos" / "video_001.mp4"
     video.parent.mkdir(parents=True)
     video.write_text("falso", encoding="utf-8")
 

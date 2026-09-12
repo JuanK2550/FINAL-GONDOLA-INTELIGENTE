@@ -51,8 +51,38 @@ function cerrarSubida() {
   setState({ subida: SUBIDA_VACIA() });
 }
 
+// Mientras el modal de subida esta ABIERTO, cambiar el estado repinta SOLO
+// el modal, no el dashboard entero.
+//
+// setState() reemplaza `#root.innerHTML` completo. Durante una subida,
+// sondearTrabajo() actualiza el progreso cada 2 segundos, asi que el panel
+// de detras se rehacia entero cada 2 segundos: medido con un
+// MutationObserver, en cinco vueltas del sondeo se recrearon cinco veces el
+// canvas del mapa de calor, el hueco del reproductor y el propio modal. Eso
+// es el parpadeo que se veia detras de la ventana de subida (reportado con
+// captura). Y no es solo estetico: el <canvas> del mapa se borra y se
+// vuelve a pintar cada vez, que es trabajo tirado mientras la CPU ya esta
+// ocupada procesando el video.
+//
+// ABRIR y CERRAR si necesitan el render completo -hay que esconder los
+// reproductores, tapar el panel, volver a mostrarlo-, y por eso
+// abrirSubida()/cerrarSubida() siguen llamando a setState(). Aqui se fuerza
+// el render completo tambien si alguien toca `abierto` por su cuenta.
 function actualizarSubida(cambios) {
-  setState({ subida: { ...state.subida, ...cambios } });
+  state.subida = { ...state.subida, ...cambios };
+
+  const anfitrion = document.getElementById('subida-modal-host');
+  if (!state.subida.abierto || !anfitrion || 'abierto' in cambios) {
+    render();
+    return;
+  }
+
+  anfitrion.innerHTML = renderSubidaModal();
+  // El <canvas> de calibracion es un nodo NUEVO cada vez que se repinta el
+  // modal, asi que hay que volver a dibujarlo y a engancharle el raton -lo
+  // mismo que hace render() en su doble requestAnimationFrame, y por la
+  // misma razon: medir el contenedor antes de que el navegador pinte da 0-.
+  requestAnimationFrame(() => requestAnimationFrame(initLienzoZonas));
 }
 
 function terminosCompletos() {
@@ -161,6 +191,90 @@ async function enviarZonas() {
 // una imagen. Las coordenadas se guardan SIEMPRE en pixeles del frame
 // original (no de la pantalla), que es lo que espera data/zones/*.json.
 
+// Propone un rectangulo a partir de DONDE CAMINO LA GENTE de verdad, en
+// vez de dejar a la persona frente a un lienzo en blanco adivinando.
+//
+// Se usan percentiles (10-90) y no el minimo/maximo: un solo punto suelto
+// -alguien que cruzo el fondo del pasillo una vez- estiraria el rectangulo
+// hasta cubrir media imagen. Con los percentiles la zona se ajusta al
+// corredor por donde de verdad pasa la mayoria.
+//
+// Es una PROPUESTA, no una decision: queda como un rectangulo mas, que se
+// puede borrar y redibujar a mano como cualquier otro.
+const PERCENTIL_BORDE = 0.10;   // recorta el 10% de cada extremo: un paso suelto no define la zona
+const BINS_HISTOGRAMA = 24;     // resolucion con la que se busca el pasillo vacio entre dos grupos
+const MINIMO_POR_GRUPO = 0.25;  // cada grupo tiene que llevarse al menos este porcentaje del transito
+const VALLE_MAXIMO = 0.45;      // el hueco entre los dos grupos tiene que ser un valle de verdad
+
+function _cajaDePuntos(puntos) {
+  const percentil = (valores, p) => {
+    const orden = [...valores].sort((a, b) => a - b);
+    return orden[Math.min(orden.length - 1, Math.floor(orden.length * p))];
+  };
+  const xs = puntos.map((p) => p.x);
+  const ys = puntos.map((p) => p.y);
+  const x1 = percentil(xs, PERCENTIL_BORDE), x2 = percentil(xs, 1 - PERCENTIL_BORDE);
+  const y1 = percentil(ys, PERCENTIL_BORDE), y2 = percentil(ys, 1 - PERCENTIL_BORDE);
+  // Un respiro alrededor: los pies marcan el centro del paso, no su borde.
+  const margenX = Math.max(12, (x2 - x1) * 0.08);
+  const margenY = Math.max(12, (y2 - y1) * 0.12);
+  const r = {
+    x: Math.max(0, x1 - margenX), y: Math.max(0, y1 - margenY),
+    w: (x2 - x1) + margenX * 2, h: (y2 - y1) + margenY * 2,
+  };
+  return (r.w < 20 || r.h < 20) ? null : r;
+}
+
+// Donde CORTAR el transito en dos, o null si es un solo corredor.
+//
+// Se arma un histograma de las x de los pies y se busca el bin mas vacio
+// que tenga un pico a cada lado. Un supermercado con dos estantes deja dos
+// grupos de pisadas con un hueco en medio (la gente para FRENTE a cada
+// estante, no entre ellos); un pasillo unico deja una sola mancha y
+// entonces no hay valle que encontrar y se devuelve null.
+//
+// Las dos condiciones existen para no partir por partir: cada lado tiene
+// que llevarse al menos MINIMO_POR_GRUPO del transito, y el valle tiene que
+// estar de verdad por debajo del pico mas bajo (VALLE_MAXIMO). Sin ellas,
+// cualquier irregularidad del muestreo parecia una division.
+function _corteEntreGrupos(xs) {
+  const min = Math.min(...xs), max = Math.max(...xs);
+  if (max - min < 40) return null;
+  const ancho = (max - min) / BINS_HISTOGRAMA;
+  const bins = new Array(BINS_HISTOGRAMA).fill(0);
+  xs.forEach((x) => {
+    bins[Math.min(BINS_HISTOGRAMA - 1, Math.floor((x - min) / ancho))] += 1;
+  });
+
+  let mejor = null;
+  for (let i = 2; i < BINS_HISTOGRAMA - 2; i += 1) {
+    const izquierda = bins.slice(0, i).reduce((a, b) => a + b, 0);
+    const derecha = xs.length - izquierda;
+    if (izquierda < xs.length * MINIMO_POR_GRUPO) continue;
+    if (derecha < xs.length * MINIMO_POR_GRUPO) continue;
+    const picoIzq = Math.max(...bins.slice(0, i));
+    const picoDer = Math.max(...bins.slice(i));
+    if (bins[i] > Math.min(picoIzq, picoDer) * VALLE_MAXIMO) continue;
+    if (!mejor || bins[i] < mejor.altura) mejor = { altura: bins[i], x: min + (i + 0.5) * ancho };
+  }
+  return mejor ? mejor.x : null;
+}
+
+// Una caja por corredor de transito. Devuelve [] si no hay con que proponer.
+//
+// Antes devolvia SIEMPRE una sola caja, del percentil 10 al 90 de TODOS los
+// pies a la vez: en un video con dos estantes separados esa caja se tragaba
+// los dos y el hueco del medio, y quedaba una zona que no distingue nada
+// -pedido explicito: "la IA a veces coloca dos estantes en uno solo"-.
+function zonasSugeridas(puntos, cupo = 4) {
+  if (puntos.length < 8) return [];
+  const corte = cupo >= 2 ? _corteEntreGrupos(puntos.map((p) => p.x)) : null;
+  const grupos = corte === null
+    ? [puntos]
+    : [puntos.filter((p) => p.x < corte), puntos.filter((p) => p.x >= corte)];
+  return grupos.map(_cajaDePuntos).filter(Boolean).slice(0, cupo);
+}
+
 function pintarLienzo() {
   const lienzo = document.getElementById('lienzo-zonas');
   if (!lienzo || !imagenCalibracion) return;
@@ -178,14 +292,35 @@ function pintarLienzo() {
   // pies), y esa zona nunca hacia match con nadie -bug real, encontrado
   // en la practica-.
   const puntos = (state.subida.job && state.subida.job.detalles && state.subida.job.detalles.puntos_pies) || [];
+  // Se dibujan como una NUBE, no como circulitos sueltos: cada punto es un
+  // halo suave que se suma a los vecinos, asi que donde mas paso gente el
+  // color se acumula y el corredor aparece solo. Con puntos duros habia que
+  // ir contandolos con la vista para intuir donde estaba el paso.
+  // 'lighter' hace que los halos se SUMEN en vez de taparse entre si.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  // El radio va en pixeles del FRAME reescalados, no en pixeles del canvas:
+  // con un radio fijo, al angostar la ventana el canvas se encoge pero los
+  // halos no, y acababan tapando la imagen que se esta calibrando.
+  const radioHalo = Math.max(6, 22 * escala);
+  puntos.forEach((p) => {
+    const cx = p.x * escala, cy = p.y * escala, radio = radioHalo;
+    const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, radio);
+    halo.addColorStop(0, 'rgba(80,200,140,0.34)');
+    halo.addColorStop(1, 'rgba(80,200,140,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radio, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+  // Encima, el punto exacto: la nube dice "por aqui pasa gente", el punto
+  // dice "aqui piso alguien". Las dos cosas se necesitan para calibrar.
   puntos.forEach((p) => {
     ctx.beginPath();
-    ctx.arc(p.x * escala, p.y * escala, 4, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(52,101,56,0.55)';
+    ctx.arc(p.x * escala, p.y * escala, Math.max(1.2, 2.6 * escala), 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(235,255,245,0.9)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
   });
 
   state.subida.rects.forEach((r, i) => {
@@ -376,6 +511,10 @@ function cuerpoSubida() {
         rodeándolos, no adivinando dónde crees que camina la gente.
       </p>` : '';
 
+    // Cuantos puntos de pies trajo el prevuelo: sin ellos no hay nada con
+    // que proponer una zona.
+    const hayPuntos = ((s.job && s.job.detalles && s.job.detalles.puntos_pies) || []).length >= 8;
+
     return `
       ${err}${aviso}
       <p class="text-xs text-[#2F3437] leading-relaxed">
@@ -383,6 +522,11 @@ function cuerpoSubida() {
         frente a cada estante (no los productos: a las personas se las ubica por los pies). Puedes marcar hasta 4.
       </p>
       ${guiaPies}
+      ${hayPuntos && s.rects.length < 4 ? `
+      <button type="button" data-action="sugerir-zona"
+              class="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[#1F6C9F]/40 bg-[#1F6C9F]/5 text-xs font-bold text-[#1F6C9F] hover:bg-[#1F6C9F]/10">
+        ${icon('sparkles', 'w-3.5 h-3.5')} Proponer zonas con el tránsito detectado
+      </button>` : ''}
       <div class="rounded-lg border border-[#EAEAEA] overflow-hidden bg-[#F3F2EF]">
         <canvas id="lienzo-zonas" class="block w-full cursor-crosshair"></canvas>
       </div>

@@ -57,7 +57,7 @@ def test_resumen_de_video_cuenta_personas_distintas(video_importado):
     assert respuesta.status_code == 200
     cuerpo = respuesta.json()
     assert cuerpo["video_id"] == video_importado
-    # 3 personas en los eventos de _preparar_archivos, 5 filas de evento.
+    # 3 personas en los eventos de _preparar_archivos, 7 filas de evento.
     assert cuerpo["people_count"] == 3
     assert cuerpo["pick_up_count"] == 1
     assert cuerpo["put_back_count"] == 0
@@ -68,9 +68,9 @@ def test_permanencia_media_promedia_personas_no_filas_de_evento(video_importado)
     evento por frame, con `dwell_time_s` ACUMULADO que crece en cada uno),
     no personas -sesgaba el numero hacia la mitad del tiempo real. Con los
     eventos de `_preparar_archivos` (track 1: dwell 1.0, 2.0, 3.0; track 2:
-    dwell 0.5; track 3: sin dwell): el promedio correcto es sobre el
-    MAXIMO de cada track_id -(3.0 + 0.5) / 2 = 1.75-, no sobre las 4 filas
-    con dwell -(1.0+2.0+3.0+0.5)/4 = 1.625-."""
+    dwell 0.2 y 0.5; track 3: sin dwell): el promedio correcto es sobre el
+    MAXIMO de cada track_id -(3.0 + 0.5) / 2 = 1.75-, no sobre las 5 filas
+    con dwell -(1.0+2.0+3.0+0.2+0.5)/5 = 1.34-."""
     respuesta = cliente.get(f"/videos/{video_importado}")
     assert respuesta.status_code == 200
     assert respuesta.json()["average_dwell_time_s"] == pytest.approx(1.75)

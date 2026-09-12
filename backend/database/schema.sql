@@ -191,9 +191,15 @@ CREATE TABLE metrics (
 
     -- Tasas. Se guardan calculadas para que el dashboard no las recalcule en
     -- cada carga, pero siempre se derivan de los conteos de arriba.
-    interaction_rate    REAL CHECK (interaction_rate BETWEEN 0 AND 1),  -- interacciones / personas
-    pick_up_rate        REAL CHECK (pick_up_rate     BETWEEN 0 AND 1),  -- pick_up / interacciones
-    conversion_rate     REAL CHECK (conversion_rate  BETWEEN 0 AND 1),  -- pick_up / personas
+    -- Las tres son PROPORCIONES (por eso el CHECK). Ojo con las dos
+    -- primeras: cuentan PERSONAS DISTINTAS, no eventos. "Interacciones /
+    -- personas" NO seria una proporcion -una misma persona puede alcanzar
+    -- el estante varias veces- y habria que recortarla a 1, que es como se
+    -- llego a mostrar "100%" en todas las filas. Ver `cerrar_zona` en
+    -- ai-service/gondola/stages/metrics.py.
+    interaction_rate    REAL CHECK (interaction_rate BETWEEN 0 AND 1),  -- personas que interactuaron / personas
+    pick_up_rate        REAL CHECK (pick_up_rate     BETWEEN 0 AND 1),  -- pick_up / interacciones (eventos)
+    conversion_rate     REAL CHECK (conversion_rate  BETWEEN 0 AND 1),  -- personas que tomaron algo / personas
 
     computed_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
 

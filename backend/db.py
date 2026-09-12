@@ -312,6 +312,22 @@ def insert_metrics(conn: psycopg.Connection, filas: list[dict[str, Any]]) -> int
 # `people_count` SIEMPRE con COUNT(DISTINCT track_id), nunca COUNT(*): ver el
 # aviso en la cabecera de la tabla `metrics` en backend/database/schema.sql.
 
+PRESENCIA_MINIMA_S = 1.0
+"""Segundos que una silueta tiene que durar para contar como una persona.
+
+Copia deliberada de `PRESENCIA_MINIMA_S` en
+`ai-service/gondola/stages/metrics.py`, que es la fuente de verdad y explica
+de donde sale el numero. Se repite -en vez de importarse- porque el backend
+no depende del AI Service: son dos capas separadas (ver docs/architecture.md)
+y el backend tiene que poder instalarse sin PyTorch.
+
+Tiene que estar aqui por una razon concreta: el resumen del video se calcula
+sobre `events` y la tabla de zonas viene de `metrics`. Si solo una de las dos
+descartara los parpadeos, el dashboard mostraria "26 personas" arriba y 15 en
+la tabla de abajo, sobre el mismo video, sin nada que explicara la diferencia.
+Si alguien cambia el valor alla, tiene que cambiarlo aqui.
+"""
+
 def video_summary(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | None:
     """Resumen general de un video: gente, interacciones, permanencia media.
 
@@ -334,7 +350,17 @@ def video_summary(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | N
         """
         SELECT
             v.video_id, v.source_name, v.duration_s, v.processed_at,
-            COUNT(DISTINCT e.track_id) FILTER (WHERE e.track_id IS NOT NULL) AS people_count,
+            (
+                SELECT COUNT(*)
+                FROM (
+                    SELECT e2.track_id
+                    FROM events e2
+                    WHERE e2.video_id = v.id AND e2.track_id IS NOT NULL
+                    GROUP BY e2.track_id
+                    HAVING MAX(e2.timestamp_s) - MIN(e2.timestamp_s)
+                           >= %(presencia_minima_s)s
+                ) AS personas
+            )                                                                AS people_count,
             COUNT(*) FILTER (WHERE e.interaction_event IS NOT NULL)          AS interaction_count,
             COUNT(*) FILTER (WHERE e.interaction_event = 'PICK_UP')          AS pick_up_count,
             COUNT(*) FILTER (WHERE e.interaction_event = 'PUT_BACK')         AS put_back_count,
@@ -347,6 +373,10 @@ def video_summary(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | N
                       AND e2.track_id IS NOT NULL
                       AND e2.dwell_time_s IS NOT NULL
                     GROUP BY e2.track_id
+                    -- Las mismas personas que cuenta people_count: promediar
+                    -- sobre otra poblacion daria dos cifras incomparables.
+                    HAVING MAX(e2.timestamp_s) - MIN(e2.timestamp_s)
+                           >= %(presencia_minima_s)s
                 ) AS dwell_maximo
             ) AS average_dwell_time_s
         FROM videos v
@@ -354,7 +384,7 @@ def video_summary(conn: psycopg.Connection, video_id: str) -> dict[str, Any] | N
         WHERE v.video_id = %(video_id)s
         GROUP BY v.id
         """,
-        {"video_id": video_id},
+        {"video_id": video_id, "presencia_minima_s": PRESENCIA_MINIMA_S},
     ).fetchone()
 
 

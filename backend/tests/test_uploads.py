@@ -11,6 +11,7 @@ podrian correr `pytest` sin instalarlo todo.
 from __future__ import annotations
 
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -160,3 +161,160 @@ def test_solo_los_origenes_locales_pueden_escribir(origen, permitido):
     )
     permitido_por_la_api = respuesta.headers.get("access-control-allow-origin") == origen
     assert permitido_por_la_api is permitido
+
+
+# --------------------------------------------------------------------------
+# Las zonas de una subida son SUYAS: no le pisan las zonas a otro video
+# --------------------------------------------------------------------------
+# `zones.zone_id` es UNIQUE en toda la tabla (ver backend/database/schema.sql):
+# dos videos de la misma gondola comparten su fila a proposito. Eso vale para
+# videos de la misma tienda, no para una subida cualquiera: con un
+# "gondola_A" fijo, CADA video subido reclamaba esa unica fila y le pisaba el
+# nombre y la categoria a todos los demas -bug real: los seis clips del MERL
+# pasaron a mostrar "Gondola subida" y "Estante 1/2/3" en vez de "Cereales" y
+# "Snacks y pasabocas"-.
+
+
+@pytest.fixture
+def trabajo_esperando_zonas(tmp_path, monkeypatch):
+    """Un trabajo listo para recibir zonas, con el disco redirigido a tmp y
+    sin lanzar la cadena de verdad (tarda minutos y necesita PyTorch)."""
+    monkeypatch.setattr(uploads, "ZONES_DIR", tmp_path / "zones")
+    monkeypatch.setattr(uploads.threading, "Thread", lambda *a, **k: _HiloFalso())
+    trabajo = uploads.Trabajo(
+        job_id="t_zonas", video_id="subido_prueba_120000", nombre_original="x.mp4"
+    )
+    trabajo.estado = "esperando_zonas"
+    trabajo.detalles = {"width": 640, "height": 480}
+    uploads._TRABAJOS[trabajo.job_id] = trabajo
+    yield trabajo, tmp_path / "zones"
+    uploads._TRABAJOS.pop(trabajo.job_id, None)
+
+
+class _HiloFalso:
+    def start(self):
+        return None
+
+
+def _zonas_de_ejemplo(n=2):
+    return {
+        "gondola_name": "Gondola de la tienda",
+        "shelves": [
+            {"name": f"Estante {i}", "product_category": None,
+             "x": 10 + i * 100, "y": 10, "width": 80, "height": 80}
+            for i in range(1, n + 1)
+        ],
+    }
+
+
+def test_la_zona_de_una_subida_lleva_su_video_id(trabajo_esperando_zonas):
+    """Sin esto, dos subidas distintas (o una subida y los videos del MERL)
+    pelean por la misma fila de `zones` y la ultima gana."""
+    trabajo, zones_dir = trabajo_esperando_zonas
+    respuesta = cliente.post(f"/uploads/{trabajo.job_id}/zones", json=_zonas_de_ejemplo())
+    assert respuesta.status_code == 200
+
+    documento = json.loads((zones_dir / f"{trabajo.video_id}.json").read_text(encoding="utf-8"))
+    zone_id = documento["gondolas"][0]["zone_id"]
+    assert zone_id == f"{trabajo.video_id}_gondola_A"
+    assert zone_id != "gondola_A"          # el id generico que causaba el choque
+
+
+def test_dos_subidas_distintas_no_comparten_zona(trabajo_esperando_zonas, tmp_path):
+    """Dos tiendas distintas subidas desde el mismo dashboard tienen que
+    acabar en filas de `zones` distintas."""
+    trabajo, zones_dir = trabajo_esperando_zonas
+    cliente.post(f"/uploads/{trabajo.job_id}/zones", json=_zonas_de_ejemplo())
+    primero = json.loads((zones_dir / f"{trabajo.video_id}.json").read_text(encoding="utf-8"))
+
+    otro = uploads.Trabajo(job_id="t_zonas_2", video_id="subido_otra_tienda_130000",
+                           nombre_original="y.mp4")
+    otro.estado = "esperando_zonas"
+    otro.detalles = {"width": 640, "height": 480}
+    uploads._TRABAJOS[otro.job_id] = otro
+    try:
+        cliente.post(f"/uploads/{otro.job_id}/zones", json=_zonas_de_ejemplo())
+        segundo = json.loads((zones_dir / f"{otro.video_id}.json").read_text(encoding="utf-8"))
+    finally:
+        uploads._TRABAJOS.pop(otro.job_id, None)
+
+    assert primero["gondolas"][0]["zone_id"] != segundo["gondolas"][0]["zone_id"]
+
+
+def test_el_archivo_de_zonas_que_escribe_la_subida_lo_entiende_el_pipeline(
+    trabajo_esperando_zonas,
+):
+    """Prueba de integracion entre las dos capas: lo que la Persona 7 escribe
+    tiene que poder leerlo la Persona 4 sin traducciones por el medio. Si el
+    formato se desincroniza, hoy nadie se entera hasta que la cadena lleva
+    diez minutos corriendo y revienta en la etapa `zones`."""
+    trabajo, zones_dir = trabajo_esperando_zonas
+    cliente.post(f"/uploads/{trabajo.job_id}/zones", json=_zonas_de_ejemplo(3))
+
+    AI = Path(__file__).resolve().parents[2] / "ai-service"
+    if str(AI) not in sys.path:
+        sys.path.insert(0, str(AI))
+    from gondola.zones_config import load_zones_config
+
+    config = load_zones_config(zones_dir / f"{trabajo.video_id}.json")
+    assert config.frame_width == 640 and config.frame_height == 480
+    assert len(list(config.shelves())) == 3
+    for gondola, estante in config.shelves():
+        assert gondola.zone_id.startswith(trabajo.video_id)
+        assert estante.floor_zone.width > 0 and estante.floor_zone.height > 0
+
+
+# --------------------------------------------------------------------------
+# Barreras de seguridad
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("job_id", [
+    "../../../etc/passwd",
+    "..%2F..%2Fsecreto",
+    "t_zonas/../../otro",
+])
+def test_un_job_id_con_rutas_no_llega_al_disco(job_id):
+    """El job_id viaja en la URL y se usa para buscar en memoria; nunca debe
+    servir para salir de las carpetas del proyecto."""
+    respuesta = cliente.get(f"/uploads/{job_id}")
+    assert respuesta.status_code in (404, 400)
+
+
+def test_un_estante_de_area_cero_se_rechaza(trabajo_esperando_zonas):
+    """Un rectangulo sin area no es una zona: ningun pie cae dentro y la
+    fila de metrics saldria vacia sin que nadie sepa por que."""
+    trabajo, _ = trabajo_esperando_zonas
+    respuesta = cliente.post(
+        f"/uploads/{trabajo.job_id}/zones",
+        json={"gondola_name": "G",
+              "shelves": [{"name": "Plano", "x": 10, "y": 10, "width": 0, "height": 50}]},
+    )
+    assert respuesta.status_code == 422
+
+
+def test_no_se_aceptan_coordenadas_negativas(trabajo_esperando_zonas):
+    trabajo, _ = trabajo_esperando_zonas
+    respuesta = cliente.post(
+        f"/uploads/{trabajo.job_id}/zones",
+        json={"gondola_name": "G",
+              "shelves": [{"name": "Fuera", "x": -50, "y": 10, "width": 40, "height": 40}]},
+    )
+    assert respuesta.status_code == 422
+
+
+def test_hay_un_tope_de_estantes(trabajo_esperando_zonas):
+    """Sin tope, alguien puede mandar mil rectangulos y dejar el archivo de
+    zonas (y la tabla) llenos de filas que nadie dibujo a conciencia."""
+    trabajo, _ = trabajo_esperando_zonas
+    respuesta = cliente.post(f"/uploads/{trabajo.job_id}/zones", json=_zonas_de_ejemplo(20))
+    assert respuesta.status_code == 422
+
+
+def test_un_nombre_de_gondola_larguisimo_se_rechaza(trabajo_esperando_zonas):
+    trabajo, _ = trabajo_esperando_zonas
+    respuesta = cliente.post(
+        f"/uploads/{trabajo.job_id}/zones",
+        json={"gondola_name": "G" * 500,
+              "shelves": [{"name": "E1", "x": 0, "y": 0, "width": 10, "height": 10}]},
+    )
+    assert respuesta.status_code == 422

@@ -187,7 +187,7 @@ def require_input(name: str, cfg: Config) -> Path:
         raise MissingInputError(
             f"No encuentro el video en:\n"
             f"    {rutas.input_path}\n\n"
-            f"Que hacer: deja el video de Scapder en data/videos/ y apunta a el "
+            f"Que hacer: deja tu video en data/videos/ y apunta a el "
             f"con VIDEO_PATH en tu .env (ver data/videos/README.md)."
         )
 

@@ -1,48 +1,33 @@
 """Formato y validacion del archivo de zonas. Responsable: Persona 4.
 
-FASE 1 (diseno): este modulo SOLO define el formato del archivo y lo valida.
-La logica que decide en que zona cae una persona (comparar `support_point`
-contra estos rectangulos) y la que acumula `dwell_time` viven en
-`gondola/stages/zones.py`, todavia sin escribir. Este modulo no las
-adelanta a proposito: eso se discute y se implementa despues.
+Describe la CAMARA de una tienda concreta: donde estan sus gondolas y
+estantes, en pixeles. Formato completo en `docs/zones-format.md`.
 
-QUE ES ESTE ARCHIVO Y POR QUE NO ES gondola/config.py
--------------------------------------------------------
-`gondola/config.py` lee ajustes del PIPELINE (.env): umbrales, rutas, modo de
-render. El archivo de zonas es otra cosa: describe la CAMARA de una tienda
-concreta -donde estan sus gondolas y estantes, en pixeles-. Cambia con cada
-camara y cada tienda, y quien lo edita (monte la camara, o alguien de
-Scapder) no tiene por que tocar Python para mover una estanteria. Por eso
-vive en un archivo de datos aparte, no en variables de entorno ni
-hardcodeado en el codigo (ver docs/zones-format.md).
+POR QUE NO VA EN gondola/config.py
+------------------------------------
+`config.py` lee ajustes del PIPELINE (.env): umbrales, rutas, modo de
+render. Esto es otra cosa: cambia con cada camara y cada tienda, y quien lo
+edita -quien monto la camara, o alguien de Scapder- no tiene por que tocar
+Python para mover una estanteria. Por eso es un archivo de datos aparte.
 
-POR QUE JSON Y NO YAML
------------------------
-YAML se lee mejor a mano (admite comentarios), pero el proyecto no tiene hoy
-ninguna dependencia de YAML, y todo lo demas -el contrato, los resumenes de
-cada etapa- ya se valida con Pydantic sobre JSON. Anadir PyYAML solo para
-este archivo es una libreria mas que instalar para las 8 personas, a cambio
-de comentarios que se pueden poner igual en el campo "name" de cada zona.
-Se prefirio seguir con lo que el proyecto ya usa en todas partes.
+JSON y no YAML: YAML se lee mejor a mano, pero el proyecto no tiene ninguna
+dependencia de YAML y todo lo demas ya se valida con Pydantic sobre JSON.
+Una libreria mas para las 8 personas, a cambio de comentarios que caben
+igual en el campo "name" de cada zona.
 
-QUE ES "floor_zone" Y POR QUE NO ES UNA CAJA COMO detection.bbox
--------------------------------------------------------------------
-Por la Decision 1 de esta fase de diseno (ver docs/data-contract.md,
-`BBox.support_point`): a una persona se le ubica por sus PIES, no por el
-centro de su caja. Eso significa que el rectangulo de una zona tiene que
-representar el AREA DEL PISO frente al estante -por donde camina y se para
-la gente-, no el area donde estan los productos en la imagen (que en una
-camara cenital/inclinada como la de este proyecto queda arriba, pegada a la
-pared). Si "floor_zone" fuera el rectangulo del producto, ningun
-`support_point` caeria nunca dentro: los pies de una persona jamas pisan el
-estante.
+QUE ES floor_zone Y POR QUE NO ES UN BBox
+-------------------------------------------
+A una persona se le ubica por sus PIES (`BBox.support_point`, ver
+`docs/data-contract.md`), asi que el rectangulo de una zona representa el
+AREA DEL PISO frente al estante -por donde camina la gente-, NO el area
+donde estan los productos. En una camara cenital los productos quedan
+arriba, pegados a la pared: si `floor_zone` fuera el rectangulo del
+producto, ningun `support_point` caeria nunca dentro.
 
-Por eso tampoco se reutiliza `gondola.contract.BBox` aqui: aunque las dos
-formas son "x, y, width, height en pixeles", `BBox` pertenece al CONTRATO de
-datos (la caja que YOLO dibuja alrededor de una persona) y mezclar los dos
-conceptos en una sola clase haria mas dificil ver donde termina el contrato
-y donde empieza la calibracion de camara. `FloorZone` es una clase propia,
-mas pequena, con el mismo shape mas no el mismo significado.
+Y por eso `FloorZone` es una clase propia y no `contract.BBox`: las dos son
+"x, y, width, height en pixeles", pero `BBox` pertenece al CONTRATO de datos
+y esto es calibracion de camara. Mezclarlas haria mas dificil ver donde
+termina uno y empieza la otra.
 """
 
 from __future__ import annotations

@@ -134,26 +134,22 @@ protege al *servidor*, no al *navegador* que lo consulta. Ahora solo se
 aceptan `null` (el dashboard como archivo) y `localhost`/`127.0.0.1` (el
 dashboard servido por HTTP).
 
-## Videos reales importados hoy
+## Videos reales importados
 
-`video_001` (video de Scapder) y cinco clips del dataset público **MERL
-Shopping Dataset** (`video_demo_merl_24_3`, `_15_3`, `_39_1`, `_18_3`,
-`_36_1` — mismo prefijo `video_demo_` que los datos de prueba del
-dashboard, pero corridos por el pipeline de verdad, no inventados a mano).
-Reutilizan la calibración de cámara de `video_001` porque comparten la
-misma resolución (920×680): cada uno tiene su propio archivo en
-`data/zones/<video_id>.json`, copia del de `video_001` con el `video_id`
-cambiado -no un solo archivo compartido-, ver `data/zones/README.md`. A
-diferencia de los videos en sí, estos SI están versionados en git (son
-JSON pequeños, no video): sin ellos, volver a correr la cadena completa
-sobre estos clips falla en la etapa `zones` pidiendo un archivo que no
-existe -bug real, encontrado en la práctica: los cinco clips MERL se
-importaron alguna vez con estos archivos, pero nunca se subieron a git,
-así que un clon nuevo (o volver a correr el pipeline en la misma máquina,
-tras borrar `data/zones/`) no podía reproducirlos-.
+Seis clips, `video_001` a `video_006`, de **la misma cámara fija en el mismo
+local**: 920×680 a 30 fps, entre 2 y 3,5 minutos cada uno. Por eso comparten
+un solo rectángulo de calibración: calibrar cada uno por separado daría seis
+copias del mismo, no seis calibraciones.
+
+Cada video tiene igualmente su propio archivo en `data/zones/<video_id>.json`,
+y **esos sí están versionados en git** (son JSON pequeños con coordenadas de
+cámara, sin ningún dato de personas). Sin ellos, volver a correr la cadena
+falla en la etapa `zones` pidiendo un archivo que no existe — bug real: los
+clips se importaron alguna vez con archivos que nunca se subieron, así que un
+clon nuevo no podía reproducirlos.
 
 **Esto vive SOLO en la máquina donde se corrió el pipeline, no en git.**
-Estos seis videos quedaron importados en el volumen de Docker de Postgres
+Estos videos quedaron importados en el volumen de Docker de Postgres
 de esa máquina (`gondola_pg_data`); un clon nuevo del repositorio arranca
 con `schema.sql` cargado pero la tabla `videos` **vacía** -los archivos de
 video en sí tampoco están en git, ver `data/videos/README.md`, así que ni

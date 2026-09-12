@@ -1,4 +1,4 @@
-"""Genera clips sinteticos en data/videos/ para trabajar sin el video de Scapder.
+"""Genera clips sinteticos en data/videos/ para trabajar sin un video real.
 
     python scripts/make_test_clips.py
 

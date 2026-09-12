@@ -115,7 +115,7 @@ function exportarCSV() {
 
   filas.push(['Resumen general']);
   filas.push(['Métrica', 'Valor']);
-  filas.push(['Personas detectadas', d.people_count]);
+  filas.push(['Personas vistas por la cámara', d.people_count]);
   filas.push(['Interacciones', d.interaction_count]);
   filas.push(['Pick-ups', d.pick_up_count]);
   filas.push(['Put-backs', d.put_back_count]);

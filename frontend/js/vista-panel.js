@@ -298,11 +298,21 @@ const BARRA_A_TOKEN = {
 
 function metricCard({ id, title, value, subtext, badge, tone = 'neutral', tooltip, highlight = false, barColor = '#1F6C9F', progressPercent = 50, countTarget = null, icono = 'layers' }) {
   const toneClasses = { accent: 'text-[#346538]', warning: 'text-[#B8790B]', danger: 'text-[#9F2F2D]', info: 'text-[#1F6C9F]', neutral: 'text-[#787774]' };
-  const clamped = Math.min(100, Math.max(0, progressPercent));
+  // progressPercent null = "este dato no tiene contra que medirse". Se
+  // dibuja el riel vacio en vez de inventar un porcentaje: una barra que no
+  // codifica nada engana mas de lo que informa.
+  const sinProporcion = progressPercent === null || progressPercent === undefined;
+  const clamped = sinProporcion ? 0 : Math.min(100, Math.max(0, progressPercent));
   const barra = BARRA_A_TOKEN[barColor] || 'var(--accent)';
   // tracking-[-0.03em]: las cifras grandes piden mas apretado que el texto.
   // tabular-nums evita que el numero "salte" de ancho mientras cuenta.
-  const claseValor = 'font-data text-[26px] sm:text-[30px] leading-none font-semibold tracking-[-0.03em] text-[#111111]';
+  // "Sin datos" ocupa mucho mas que una cifra: a 30px se desborda de la
+  // tarjeta. Cuando el valor no empieza por un digito se baja el tamano y se
+  // quita la monoespaciada -es una frase, no una medida.
+  const esCifra = /^[0-9]/.test(String(value ?? ''));
+  const claseValor = esCifra
+    ? 'font-data text-[26px] sm:text-[30px] leading-none font-semibold tracking-[-0.03em] text-[#111111]'
+    : 'text-[15px] sm:text-[17px] leading-tight font-semibold text-[#787774]';
   const valueHtml = countTarget !== null
     ? `<span class="${claseValor}" data-count-target="${countTarget}">0</span>`
     : `<span class="${claseValor}">${value}</span>`;
@@ -334,7 +344,7 @@ function metricCard({ id, title, value, subtext, badge, tone = 'neutral', toolti
          El riel se ve siempre, para que "casi vacio" se distinga de "sin
          dato" -antes con 0% no se veia nada y parecia que faltaba algo. -->
     <div class="w-full h-1.5 rounded-full overflow-hidden mt-3" style="background:var(--surface-3)">
-      <div class="h-full w-full kpi-bar rounded-full" style="transform:scaleX(${clamped / 100});background:${barra}"></div>
+      ${sinProporcion ? '' : `<div class="h-full w-full kpi-bar rounded-full" style="transform:scaleX(${clamped / 100});background:${barra}"></div>`}
     </div>
   </div>`;
 }
@@ -354,11 +364,27 @@ function renderVideoPlayer() {
   // y siempre muestra "no disponible", que no aporta nada a quien esta
   // viendo un dato de prueba a proposito.
   if (!state.selectedVideoId || isDemoVideo(state.selectedVideoId)) return '';
-  // El <video> de verdad NO va aqui adentro: vive en #video-player-portal,
-  // FUERA de #root (ver el <body> y el comentario grande en reproductor.js,
-  // junto a initVideoPlayer()). Este div es solo un HUECO -con una altura
-  // fija, para que el portal sepa que tamano ocupar- que reserva el
-  // espacio en el layout normal de la pagina.
+  // Solo un HUECO: el <video> vive en #video-player-portal, fuera de #root
+  // (ver reproductor.js). Este div reserva el espacio y le dice al portal
+  // que tamano ocupar.
+  //
+  // La proporcion sale del ancho/alto REALES del video. Un navegador pinta
+  // un <video> respetando su proporcion aunque se le fuerce a llenar la
+  // caja, asi que un hueco con otra proporcion deja franjas negras.
+  // width/height viven en state.videos, NO en state.videoDetail.
+  //
+  // DOS REGLAS QUE NO SE PUEDEN INVERTIR (las dos son bugs ya vistos):
+  //   - NADA de max-height. Con max-height + width:100%, en una pantalla
+  //     ancha y baja el navegador no puede cumplir ambas y gana max-height:
+  //     recorta el alto, deja el ancho al 100% y vuelven las franjas.
+  //   - Para que no salga gigante se acota el ANCHO. Con max-width el
+  //     navegador encoge las dos medidas y aspect-ratio se sigue
+  //     cumpliendo. El tope es 58vh traducido a ancho por la proporcion,
+  //     asi que en pantalla baja se achica solo.
+  const current = state.videos.find((v) => v.video_id === state.selectedVideoId);
+  const aspecto = current && current.width && current.height ? `${current.width} / ${current.height}` : '16 / 9';
+  const proporcion = current && current.width && current.height ? current.width / current.height : 16 / 9;
+  const topeAncho = `calc(58vh * ${proporcion.toFixed(4)})`;
   return `
   <div class="no-imprimir bg-white rounded-xl border border-[#EAEAEA] p-4 sm:p-5 shadow-xs">
     <div class="flex items-center gap-2.5 mb-3">
@@ -368,7 +394,7 @@ function renderVideoPlayer() {
         <p class="text-[11px] text-[#787774]">Sin imágenes reales de la tienda — solo la detección</p>
       </div>
     </div>
-    <div id="video-player-placeholder" class="w-full rounded-lg bg-[#0B1220]" style="height:400px"></div>
+    <div id="video-player-placeholder" class="w-full mx-auto rounded-lg bg-[#0B1220]" style="aspect-ratio:${aspecto};max-width:${topeAncho}"></div>
   </div>`;
 }
 

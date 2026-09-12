@@ -101,7 +101,7 @@ def comando_doctor() -> int:
 
     print("\n[4] Archivos de entrada")
     _informar_archivo("Video ", cfg.video_path,
-                      "deja el video de Scapder en data/videos/ (ver su README)")
+                      "deja tu video en data/videos/ y apuntalo con VIDEO_PATH (ver su README)")
     _informar_archivo("Modelo", cfg.model_path,
                       "descarga los pesos YOLO a data/models/ (hace falta en la Fase 3)")
     if sys.platform == "win32":
@@ -114,6 +114,8 @@ def comando_doctor() -> int:
                           "descarga openh264-2.5.0-win64.dll a data/models/ "
                           "(ver data/models/README.md) o los videos .privacy.mp4 "
                           "no se van a poder reproducir en un navegador")
+        if _dll_openh264.exists():
+            _informar_codec_h264()
 
     print("\n[5] Estado de la cadena")
     print(f"    Carpeta de salida: {cfg.output_dir}")
@@ -127,6 +129,45 @@ def comando_doctor() -> int:
     print("  Siguiente paso:  python -m gondola run")
     print("=" * 70)
     return EXIT_OK
+
+
+def _informar_codec_h264() -> None:
+    """Comprueba que H.264 CODIFIQUE de verdad, no solo que la DLL exista.
+
+    Que el archivo este en data/models/ no basta, y esto no es teorico: la
+    DLL estaba ahi, este mismo `doctor` la daba por buena, y aun asi FFmpeg
+    no conseguia cargarla y se iba a un codec de respaldo en silencio -los
+    renders salian de 300 MB y sin garantia de abrir en un navegador- (ver
+    el comentario largo en gondola/video/render.py). Un archivo presente y
+    un codec que funciona son dos cosas distintas, asi que aqui se intenta
+    escribir un video de verdad, minusculo, y se mira si salio algo.
+    """
+    import tempfile
+
+    try:
+        import cv2
+        import numpy as np
+        from gondola.video import render  # registra la DLL al importarse
+    except Exception:
+        return  # sin OpenCV instalado no hay nada que comprobar todavia
+
+    del render
+    with tempfile.TemporaryDirectory() as carpeta:
+        prueba = Path(carpeta) / "prueba.mp4"
+        writer = cv2.VideoWriter(str(prueba), cv2.VideoWriter.fourcc(*"avc1"), 25.0, (64, 64))
+        for _ in range(5):
+            writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+        writer.release()
+        sirve = prueba.exists() and prueba.stat().st_size > 0
+
+    if sirve:
+        print("    [ok    ] Codec H.264   codifica correctamente")
+    else:
+        print("    [FALTA ] Codec H.264   la DLL esta pero FFmpeg no la pudo cargar.")
+        print("             Que hacer: comprueba que sea la version 2.5.0 de 64 bits")
+        print("             (ver data/models/README.md). Mientras tanto los renders")
+        print("             salen con un codec de respaldo: pesan mucho mas y puede")
+        print("             que el navegador no los reproduzca.")
 
 
 def _version_instalada(modulo: str) -> str | None:

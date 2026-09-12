@@ -178,7 +178,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         )
 
     return Config(
-        video_path=_resolver_video_path(_leer_ruta(env, "VIDEO_PATH", "data/videos/scapder.mp4")),
+        video_path=_resolver_video_path(_leer_ruta(env, "VIDEO_PATH", "data/videos/video_001.mp4")),
         video_id=video_id,
         model_path=_leer_ruta(env, "MODEL_PATH", "data/models/yolo11n.pt"),
         output_dir=_leer_ruta(env, "OUTPUT_DIR", "data/output"),

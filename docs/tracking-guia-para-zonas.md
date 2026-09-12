@@ -60,6 +60,20 @@ apuesta geométrica, no una certeza de identidad.** Concretamente:
   un cambio de 62% en la altura ya puede romper la recuperación, sin importar
   qué tan bien se prediga la posición — ver el docstring de `predecir_bbox`
   en `track.py` si quieres el detalle).
+- **Pasa menos que antes, pero sigue pasando.** `track` ahora intenta
+  recuperar la identidad: un track perdido no se olvida durante
+  `VENTANA_DE_REAPARICION_S=3.0` segundos, y si aparece una detección a menos
+  de 140 px de donde se perdió y con un tamaño parecido, recupera **su**
+  número en vez de estrenar uno (ver el bloque REAPARICION en `track.py`).
+  Medido sobre los siete videos reales: las identidades distintas bajaron de
+  76 a 60 y los "relevos" (un track que muere y otro que nace en su sitio)
+  de 23 a 14, sin que suban los `id_switches_sospechosos`.
+- **Novedad que te afecta directamente: un `track_id` puede tener un HUECO**
+  de hasta 3 segundos sin eventos, y luego continuar. Antes eso era
+  imposible: pasado `MAX_AGE_S` el número se abandonaba para siempre. Si tu
+  código asume que los eventos de un `track_id` son consecutivos en el
+  tiempo, revísalo. `zones.py` ya lo contempla a propósito y cuenta esos
+  segundos como permanencia — el porqué está en su docstring.
 - **Consecuencia directa para `dwell_time`:** el contrato dice que
   `dwell_time` son *"segundos acumulados que ESE `track_id`"* lleva en una
   zona. Si el `track_id` cambia a mitad de una permanencia real — alguien

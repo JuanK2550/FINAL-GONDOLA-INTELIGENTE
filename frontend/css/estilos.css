@@ -172,6 +172,21 @@ html.dark {
   --font-data: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 }
 body { font-family: var(--font-ui); }
+
+/* El reproductor SIN pantalla completa ya llena su hueco exacto -el hueco
+   usa aspect-ratio con el ancho/alto real del video, ver
+   #video-player-placeholder en vista-panel.js-. Pero en pantalla completa
+   el navegador deja de mirar ese hueco: pinta el <video> directo contra la
+   pantalla fisica, y como el video (920x680, o lo que sea) casi nunca
+   coincide con la proporcion panoramica de un monitor, aparecen franjas
+   negras a los lados -pedido explicito del usuario: prefiere recortar los
+   bordes del video a ver esas franjas-. object-fit:cover en pantalla
+   completa hace que el video llene la pantalla entera recortando los
+   bordes en vez de dejar barras; fuera de pantalla completa no se toca
+   nada (el hueco ya tiene la proporcion correcta, no hay nada que
+   recortar). */
+video:fullscreen { object-fit: cover; }
+video:-webkit-full-screen { object-fit: cover; }
 /* Mono SOLO para cifras medidas: no es disfraz de "tecnico", son medidas,
    y sus numerales de ancho fijo evitan que un numero cambie de tamano
    mientras cuenta o descuadre una columna. */
@@ -215,38 +230,48 @@ html.dark .app-bg::before {
    una vive en `style` inline en index.html (no tiene sentido escribir 50
    reglas nth-child aqui). */
 /* z-index:2, POR ENCIMA de #root (1): la portada tiene su propio fondo
-   opaco (#0A0713) y crea su propio stacking context (isolation:isolate),
-   asi que con z-index:0 -detras de #root, como el resto del fondo- las
-   estrellas quedaban completamente tapadas ahi, invisibles del todo
-   -bug real, encontrado con captura de pantalla, no solo leyendo el CSS-.
-   Encima de #root SI cruzan sobre las tarjetas del panel de datos, pero
-   son puntos de 2px, sin bloquear clics (pointer-events:none): el costo
-   de legibilidad es minimo comparado con quedar invisibles en la mitad
-   de las pantallas de la app. */
-.estrellas { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
-.estrella {
+   opaco (#0A0713) y crea su propio contexto de apilamiento
+   (isolation:isolate), asi que con z-index:0 -detras de #root, como el
+   resto del fondo- los cometas quedaban completamente tapados ahi,
+   invisibles del todo -bug real, encontrado con captura de pantalla, no
+   solo leyendo el CSS-. Encima de #root SI cruzan sobre las tarjetas del
+   panel, pero son solo DOS, pasan en menos de un segundo y no bloquean
+   clics (pointer-events:none). */
+.cometas { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+
+/* Un cometa es una estela: transparente en la cola, solida en la cabeza.
+   Se dibuja con un degradado sobre un elemento alargado -no hace falta
+   ningun elemento extra para la cola- y se inclina con `--giro` para que
+   la estela apunte en la direccion en que viaja. */
+.cometa {
   position: absolute;
-  top: 0;
+  top: -14vh;
   width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: #FFFFFF;
-  box-shadow: 0 0 4px 1px rgb(255 255 255 / .55), 0 -14px 16px -3px rgb(255 255 255 / .30);
+  height: 96px;
+  border-radius: 999px;
+  background: linear-gradient(to bottom, rgb(255 255 255 / 0), rgb(255 255 255 / .55) 62%, #FFFFFF 100%);
+  filter: drop-shadow(0 0 6px rgb(255 255 255 / .85)) drop-shadow(0 0 14px rgb(120 210 255 / .55));
   opacity: 0;
-  animation: caerEstrella linear infinite;
+  /* 3s de ciclo: la caida ocupa el primer ~28% (menos de un segundo, de ahi
+     lo de "que bajen rapido") y el resto la pantalla queda limpia. */
+  animation: cruzarCometa 3s linear infinite;
+  will-change: transform, opacity;
 }
-:root:not(.dark) .estrella {
-  background: #2E6C9E;
-  box-shadow: 0 0 3px 1px rgb(46 108 158 / .35), 0 -12px 14px -3px rgb(46 108 158 / .18);
+:root:not(.dark) .cometa {
+  background: linear-gradient(to bottom, rgb(46 108 158 / 0), rgb(46 108 158 / .45) 62%, #2E6C9E 100%);
+  filter: drop-shadow(0 0 5px rgb(46 108 158 / .55));
 }
-@keyframes caerEstrella {
-  0%   { opacity: 0; transform: translate3d(0, -6vh, 0); }
-  6%   { opacity: 1; }
-  94%  { opacity: 1; }
-  100% { opacity: 0; transform: translate3d(var(--deriva, 20px), 104vh, 0); }
+@keyframes cruzarCometa {
+  0%   { opacity: 0; transform: translate3d(0, 0, 0) rotate(var(--giro, 0deg)); }
+  5%   { opacity: 1; }
+  24%  { opacity: 1; }
+  30%  { opacity: 0; transform: translate3d(var(--dx, 0), 122vh, 0) rotate(var(--giro, 0deg)); }
+  /* Del 30% al 100% se queda quieto y fuera de cuadro: es la pausa entre
+     pasada y pasada. */
+  100% { opacity: 0; transform: translate3d(var(--dx, 0), 122vh, 0) rotate(var(--giro, 0deg)); }
 }
-@media (prefers-reduced-motion: reduce) { .estrellas { display: none; } }
-@media print { .estrellas { display: none; } }
+@media (prefers-reduced-motion: reduce) { .cometas { display: none; } }
+@media print { .cometas { display: none; } }
 
 /* --------------------------------------------------------------------------
    3. SUPERFICIES DEL NAVEGADOR

@@ -1,44 +1,26 @@
 """API REST: sirve lo que el importador dejo en PostgreSQL. Responsable: Persona 7.
 
-Arranque local:
-    cd backend
-    uvicorn api:app --reload --host 0.0.0.0 --port 8000
+FastAPI + psycopg (via `db.py`), sin ORM: para un puñado de consultas de
+solo lectura, un ORM es una capa de traduccion que nadie mas del equipo
+necesita aprender, y SQL explicito en `db.py` lo lee cualquiera que ya
+conozca `schema.sql`.
 
-STACK Y POR QUE
-----------------
-FastAPI + psycopg (via `db.py`), sin ORM. Para cuatro consultas de solo
-lectura un ORM es una capa de traduccion que nadie mas del equipo necesita
-aprender; SQL explicito en `db.py` es mas facil de leer para las otras 7
-personas del proyecto, que ya conocen `schema.sql`.
+Esta capa NO calcula nada: cada endpoint llama a `db.py` y devuelve lo que
+llega. Toda la aritmetica ya la hizo la Persona 6 en `metrics.json`, o
+Postgres al agregar `events`.
 
-Esta capa NO calcula nada: cada endpoint llama a una funcion de `db.py` y
-devuelve lo que llega. Toda la aritmetica (tasas, agregados) ya la hizo la
-Persona 6 al escribir `metrics.json`, o Postgres al agregar `events`.
+CORS: UNA LISTA DE ORIGENES, NO "*"
+-------------------------------------
+El dashboard es un HTML suelto que se abre con `file://`, y un navegador
+que abre un archivo local manda `Origin: null`. Sin `CORSMiddleware` el
+navegador BLOQUEA la respuesta aunque el servidor la haya procesado bien.
 
-QUE NO HAY AQUI TODAVIA A PROPOSITO
---------------------------------------
-Mapa de calor y recomendaciones con nivel de confianza son de otra
-fase/persona (Persona 8 consume esta API, no le pega a la base de datos por
-su cuenta: ver docs/architecture.md, seccion "Personas 7 y 8"). Esta API
-solo expone datos.
-
-CORS: POR QUE UNA LISTA DE ORIGENES, NO "*"
------------------------------------------------
-`frontend/index.html` es un archivo HTML suelto (sin build, sin servidor
-propio) que la Persona 8 abre directo con el navegador (`file://...`). Un
-navegador que abre un archivo local manda `Origin: null` en sus peticiones
-`fetch()`, y sin `CORSMiddleware` el navegador BLOQUEA la respuesta aunque
-la API la haya procesado bien -el bloqueo es del lado del navegador, no de
-este servidor-.
-
-Antes esto era `allow_origins=["*"]`, aceptable cuando la API solo
-RESPONDIA datos (puros GET). Desde que existe `uploads.py` (Persona 7) hay
-endpoints que ESCRIBEN -guardan un video, lanzan el pipeline-, y con "*"
-cualquier pagina que alguien de la tienda visitara en su navegador podia
-dispararlos contra `127.0.0.1` sin que la persona se enterara: "esto no
-sale a internet" no protege de eso, el navegador si sale a internet.
-`ORIGENES_PERMITIDOS` (mas abajo) solo deja pasar `null` (el dashboard como
-archivo) y `localhost`/`127.0.0.1` (el dashboard servido por HTTP).
+Antes era `allow_origins=["*"]`, aceptable cuando esto solo RESPONDIA datos.
+Desde que existe `uploads.py` hay endpoints que ESCRIBEN -guardan un video,
+lanzan el pipeline-, y con "*" cualquier pagina que alguien visitara en su
+navegador podia dispararlos contra `127.0.0.1` sin que se enterara: "esto no
+sale a internet" no protege de eso, porque el navegador si sale.
+`ORIGENES_PERMITIDOS` deja pasar solo `null` y `localhost`/`127.0.0.1`.
 """
 
 from __future__ import annotations

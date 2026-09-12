@@ -153,7 +153,7 @@ def test_si_video_path_no_existe_y_hay_un_solo_video_se_usa_ese(tmp_path):
     real = carpeta / "VID-20260904-WA0002.mp4"
     real.write_bytes(b"no es un video de verdad, solo hace falta que exista")
 
-    resultado = _resolver_video_path(carpeta / "scapder.mp4")
+    resultado = _resolver_video_path(carpeta / "video_001.mp4")
 
     assert resultado == real
 
@@ -161,7 +161,7 @@ def test_si_video_path_no_existe_y_hay_un_solo_video_se_usa_ese(tmp_path):
 def test_si_video_path_existe_no_se_toca_aunque_haya_otros_videos(tmp_path):
     carpeta = tmp_path / "videos"
     carpeta.mkdir()
-    configurado = carpeta / "scapder.mp4"
+    configurado = carpeta / "video_001.mp4"
     configurado.write_bytes(b"x")
     (carpeta / "otro.mp4").write_bytes(b"x")
 
@@ -172,9 +172,9 @@ def test_si_no_hay_ningun_video_en_la_carpeta_se_deja_la_ruta_configurada(tmp_pa
     carpeta = tmp_path / "videos"
     carpeta.mkdir()
 
-    resultado = _resolver_video_path(carpeta / "scapder.mp4")
+    resultado = _resolver_video_path(carpeta / "video_001.mp4")
 
-    assert resultado == carpeta / "scapder.mp4"
+    assert resultado == carpeta / "video_001.mp4"
 
 
 def test_si_hay_varios_videos_no_se_adivina_cual_usar(tmp_path):
@@ -184,9 +184,9 @@ def test_si_hay_varios_videos_no_se_adivina_cual_usar(tmp_path):
     (carpeta / "uno.mp4").write_bytes(b"x")
     (carpeta / "dos.mp4").write_bytes(b"x")
 
-    resultado = _resolver_video_path(carpeta / "scapder.mp4")
+    resultado = _resolver_video_path(carpeta / "video_001.mp4")
 
-    assert resultado == carpeta / "scapder.mp4"
+    assert resultado == carpeta / "video_001.mp4"
 
 
 def test_archivos_que_no_son_video_se_ignoran_al_buscar_el_unico_candidato(tmp_path):
@@ -196,7 +196,7 @@ def test_archivos_que_no_son_video_se_ignoran_al_buscar_el_unico_candidato(tmp_p
     real = carpeta / "clip.mov"
     real.write_bytes(b"x")
 
-    assert _resolver_video_path(carpeta / "scapder.mp4") == real
+    assert _resolver_video_path(carpeta / "video_001.mp4") == real
 
 
 def test_load_config_aplica_el_fallback_de_video_path(tmp_path):
@@ -209,6 +209,6 @@ def test_load_config_aplica_el_fallback_de_video_path(tmp_path):
     real = carpeta / "IMG_1234.mp4"
     real.write_bytes(b"x")
 
-    cfg = load_config(env={"VIDEO_PATH": str(carpeta / "scapder.mp4")})
+    cfg = load_config(env={"VIDEO_PATH": str(carpeta / "video_001.mp4")})
 
     assert cfg.video_path == real

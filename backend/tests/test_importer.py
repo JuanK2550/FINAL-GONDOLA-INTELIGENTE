@@ -113,12 +113,20 @@ def _preparar_archivos(tmp_path: Path, video_id: str) -> tuple[Path, Path, list[
     # Persona 1: se acerca al estante 1 y toma un producto.
     # Persona 2: pasa por el estante 2, no interactua.
     # Persona 3: sin zona (pasillo, entre gondolas).
+    #
+    # Las tres aparecen en MAS DE UN FRAME, separadas por mas de un segundo,
+    # a proposito: `metrics.PRESENCIA_MINIMA_S` no cuenta como persona a una
+    # silueta que solo se vio un instante -es deteccion que parpadeo, no
+    # gente-. Una persona de un solo frame no existe en un video real, y una
+    # fixtura que la usara probaria un caso imposible.
     eventos = [
         _evento(video_id, 25, 1, gondola_id, "estante_1", InteractionEvent.APPROACH, "bebidas", 1.0),
         _evento(video_id, 50, 1, gondola_id, "estante_1", None, None, 2.0),
         _evento(video_id, 75, 1, gondola_id, "estante_1", InteractionEvent.PICK_UP, "bebidas", 3.0),
-        _evento(video_id, 100, 2, gondola_id, "estante_2", InteractionEvent.APPROACH, "snacks", 0.5),
+        _evento(video_id, 100, 2, gondola_id, "estante_2", InteractionEvent.APPROACH, "snacks", 0.2),
+        _evento(video_id, 135, 2, gondola_id, "estante_2", None, None, 0.5),
         _evento(video_id, 125, 3, None, None, None, None, None),
+        _evento(video_id, 160, 3, None, None, None, None, None),
     ]
 
     interact_path = output_dir / f"{video_id}.interact.jsonl"
@@ -193,7 +201,7 @@ def test_duration_prefiere_el_detect_summary_sobre_el_ultimo_evento(tmp_path, vi
     frame_count/duration_s de cv2.CAP_PROP_FRAME_COUNT, el video COMPLETO),
     el importador debe preferirlo sobre inferir del ultimo evento."""
     output_dir, zones_dir, eventos = _preparar_archivos(tmp_path, video_id)
-    ultimo_evento_s = max(e.timestamp for e in eventos)  # 125/25 = 5.0s
+    ultimo_evento_s = max(e.timestamp for e in eventos)  # 160/25 = 6.4s
 
     # El video real dura bastante mas: los ultimos segundos, sin nadie.
     duracion_real = ultimo_evento_s + 30.0

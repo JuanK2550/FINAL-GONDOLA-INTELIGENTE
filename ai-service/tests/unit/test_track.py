@@ -17,6 +17,7 @@ from gondola.jsonl import read_events, write_events
 from gondola.stages.track import (
     IOU_MINIMO_PARA_EMPAREJAR,
     MAX_AGE_S,
+    VENTANA_DE_REAPARICION_S,
     Resumen,
     Track,
     actualizar_track,
@@ -321,18 +322,83 @@ def test_un_hueco_corto_conserva_el_track_id():
     assert ids == [1, 1]
 
 
-def test_un_hueco_mas_largo_que_max_age_crea_un_track_nuevo():
-    """Aunque el archivo pase de un frame al 'siguiente', si en tiempo real
-    paso mas de MAX_AGE_S, la persona se da por perdida: es lo esperado, no un
-    fallo. La deteccion de vuelta abre un track nuevo."""
+def test_quien_reaparece_donde_se_perdio_recupera_su_numero():
+    """Pasado MAX_AGE_S el track se da por perdido, pero NO se olvida: si
+    poco despues aparece una deteccion en el mismo sitio, es la misma persona
+    volviendo y recupera su numero.
+
+    Es el pedido explicito: que alguien que sale y entra del encuadre siga
+    siendo 'Persona 1' y no pase a ser 'Persona 7'. Ver el bloque
+    REAPARICION en gondola/stages/track.py."""
     eventos = [
         crear_evento(0, 0.0, x=100, y=100),
         crear_evento(1, MAX_AGE_S + 0.1, x=100, y=100),
     ]
     resumen = Resumen()
     ids = [e.track_id for e in asignar_track_ids(iter(eventos), resumen)]
+    assert ids == [1, 1]
+    assert resumen.tracks_creados == 1      # no se estreno ningun numero
+    assert resumen.reapariciones == 1
+
+
+def test_quien_tarda_demasiado_en_volver_si_estrena_numero():
+    """La memoria tiene limite. Pasada VENTANA_DE_REAPARICION_S ya no hay
+    forma de sostener que sea la misma persona: en ese hueco pudo entrar
+    cualquiera y pararse en el mismo sitio."""
+    eventos = [
+        crear_evento(0, 0.0, x=100, y=100),
+        crear_evento(1, VENTANA_DE_REAPARICION_S + 0.5, x=100, y=100),
+    ]
+    resumen = Resumen()
+    ids = [e.track_id for e in asignar_track_ids(iter(eventos), resumen)]
     assert ids == [1, 2]
-    assert resumen.tracks_creados == 2
+    assert resumen.reapariciones == 0
+
+
+def test_reaparecer_lejos_no_cuenta_como_la_misma_persona():
+    """Volver al OTRO LADO del pasillo no es volver: es otra persona. Sin
+    esta condicion, dos clientes distintos en extremos opuestos de la gondola
+    acabarian compartiendo identidad y mezclando sus recorridos."""
+    eventos = [
+        crear_evento(0, 0.0, x=100, y=100),
+        crear_evento(1, MAX_AGE_S + 0.1, x=700, y=100),
+    ]
+    resumen = Resumen()
+    ids = [e.track_id for e in asignar_track_ids(iter(eventos), resumen)]
+    assert ids == [1, 2]
+    assert resumen.reapariciones == 0
+
+
+def test_reaparecer_con_otro_tamano_no_cuenta_como_la_misma_persona():
+    """Una caja del doble de area es alguien al doble de cerca de la
+    camara, aunque el centro coincida."""
+    eventos = [
+        crear_evento(0, 0.0, x=100, y=100, w=40, h=100),
+        crear_evento(1, MAX_AGE_S + 0.1, x=100, y=100, w=120, h=300),
+    ]
+    resumen = Resumen()
+    ids = [e.track_id for e in asignar_track_ids(iter(eventos), resumen)]
+    assert ids == [1, 2]
+    assert resumen.reapariciones == 0
+
+
+def test_dos_personas_no_pueden_reclamar_la_misma_identidad_perdida():
+    """Si dos detecciones del MISMO frame caen cerca de un unico track
+    perdido, solo una puede heredarlo. Sin esto, dos personas distintas
+    saldrian con el mismo numero en el mismo frame."""
+    eventos = [
+        crear_evento(0, 0.0, x=100, y=100),
+        crear_evento(1, MAX_AGE_S + 0.1, x=100, y=100),
+        crear_evento(1, MAX_AGE_S + 0.1, x=120, y=100),
+    ]
+    ids = [e.track_id for e in asignar_track_ids(iter(eventos), Resumen())]
+    assert len(set(ids[1:])) == 2          # dos identidades distintas
+    assert resumen_de_ids_unico(ids[1:])
+
+
+def resumen_de_ids_unico(ids):
+    """Ayuda de lectura: ningun id repetido dentro del mismo frame."""
+    return len(ids) == len(set(ids))
 
 
 def test_dos_personas_lejanas_nunca_comparten_id():
@@ -618,3 +684,108 @@ def test_run_con_video_real_genera_un_video_anotado(tmp_path):
     salida = list(read_events(rutas.output_path))
     assert [e.frame for e in salida] == [0, 2]
     assert all(e.track_id is not None for e in salida)
+
+
+# --------------------------------------------------------------------------
+# La prediccion no puede ser peor que quedarse quieto
+# --------------------------------------------------------------------------
+# Ver el docstring de `emparejar`. El caso real: alguien caminando rapido que
+# FRENA al llegar a la gondola -el momento que el proyecto existe para medir-.
+# La extrapolacion de velocidad manda la caja predicha lejos, el IoU contra la
+# caja real cae bajo el umbral y el track moria, reapareciendo la misma
+# persona con otro numero (medido: dos identidades a 1 pixel de distancia).
+
+def test_quien_se_ocluye_y_reaparece_quieto_conserva_su_track():
+    """El caso real medido: alguien camina, una gondola lo tapa dos o tres
+    frames, y reaparece PARADO donde estaba (llego a mirar el estante). La
+    prediccion, extrapolando la velocidad que traia, lo pone lejos y el IoU
+    con la caja real da 0; la ULTIMA CAJA CONOCIDA da 1.0. Sin el mejor de
+    los dos, ahi nacia un track nuevo -dos identidades para una persona que
+    no se movio-."""
+    eventos = [
+        crear_evento(0, 0.0, x=100.0, y=400.0, w=60.0, h=120.0),
+        crear_evento(1, 0.1, x=130.0, y=400.0, w=60.0, h=120.0),
+        crear_evento(2, 0.2, x=160.0, y=400.0, w=60.0, h=120.0),
+        # Tapado en t=0.3, 0.4 y 0.5: ninguna deteccion.
+        # Reaparece EN EL MISMO SITIO: se detuvo frente a la gondola.
+        crear_evento(6, 0.6, x=160.0, y=400.0, w=60.0, h=120.0),
+        crear_evento(7, 0.7, x=160.0, y=400.0, w=60.0, h=120.0),
+    ]
+    resultado = list(asignar_track_ids(iter(eventos), Resumen()))
+    assert len({e.track_id for e in resultado}) == 1
+
+
+def test_la_prediccion_sola_no_habria_alcanzado():
+    """Deja constancia de POR QUE hace falta el respaldo: en ese mismo
+    instante la prediccion no solapa nada con la caja real."""
+    track = Track(bbox=BBox(x=160.0, y=400.0, width=60.0, height=120.0),
+                  timestamp=0.2, velocity=(300.0, 0.0))
+    prediccion = predecir_bbox(track, 0.6)
+    real = BBox(x=160.0, y=400.0, width=60.0, height=120.0)
+    assert iou(prediccion, real) < IOU_MINIMO_PARA_EMPAREJAR
+    assert iou(track.bbox, real) == 1.0
+
+
+def test_el_umbral_de_iou_sigue_mandando():
+    """Tomar el mejor de los dos IoU NO relaja el umbral: una deteccion que
+    no solapa ni con la prediccion ni con la ultima caja abre un track nuevo,
+    que es lo correcto -es preferible un id de mas a intercambiar dos
+    identidades en silencio-."""
+    resumen = Resumen()
+    eventos = [
+        crear_evento(0, 0.0, x=100.0, y=400.0),
+        crear_evento(1, 0.1, x=800.0, y=400.0),   # al otro lado del encuadre
+    ]
+    list(asignar_track_ids(iter(eventos), resumen))
+    assert resumen.tracks_creados == 2
+
+
+# --------------------------------------------------------------------------
+# Segunda oportunidad: un track VIVO que se quedo sin pareja
+# --------------------------------------------------------------------------
+
+def test_a_quien_le_cambia_mucho_la_caja_no_se_le_estrena_numero():
+    """Caso real medido en video_001: a los 55s nacia 'Persona 2' encima de
+    'Persona 1', que seguia viva. La persona se habia alejado de la camara y
+    su caja perdio la mitad del area en pocos frames; a 94px de distancia el
+    IoU no llegaba al umbral. No estaba perdida -no habia pasado MAX_AGE_S-,
+    asi que el cementerio tampoco la cubria: hacia falta mirar otra vez a los
+    vivos que se quedaron sin nada."""
+    eventos = [
+        crear_evento(0, 0.0, x=300.0, y=300.0, w=80.0, h=200.0),
+        crear_evento(1, 0.1, x=300.0, y=300.0, w=80.0, h=200.0),
+        # Misma persona, mas lejos: se desplaza y la caja se encoge a la mitad.
+        crear_evento(2, 0.2, x=360.0, y=330.0, w=58.0, h=145.0),
+        crear_evento(3, 0.3, x=362.0, y=332.0, w=58.0, h=145.0),
+    ]
+    resumen = Resumen()
+    ids = [e.track_id for e in asignar_track_ids(iter(eventos), resumen)]
+    assert len(set(ids)) == 1
+    assert resumen.tracks_creados == 1
+    assert resumen.rescates >= 1
+
+
+def test_la_segunda_oportunidad_no_junta_a_dos_personas_lejanas():
+    """El rescate usa las MISMAS distancias que la reaparicion: alguien al
+    otro lado del encuadre nunca es 'el que se quedo sin pareja aqui'."""
+    resumen = Resumen()
+    eventos = [
+        crear_evento(0, 0.0, x=100.0, y=300.0, w=80.0, h=200.0),
+        crear_evento(1, 0.1, x=800.0, y=300.0, w=80.0, h=200.0),
+    ]
+    list(asignar_track_ids(iter(eventos), resumen))
+    assert resumen.tracks_creados == 2
+    assert resumen.rescates == 0
+
+
+def test_un_track_ya_emparejado_no_puede_rescatar_otra_deteccion():
+    """Si un track ya se llevo una caja en este frame, no puede llevarse una
+    segunda: seria la misma identidad en dos sitios a la vez."""
+    eventos = [
+        crear_evento(0, 0.0, x=300.0, y=300.0, w=80.0, h=200.0),
+        crear_evento(1, 0.1, x=300.0, y=300.0, w=80.0, h=200.0),
+        crear_evento(1, 0.1, x=340.0, y=310.0, w=76.0, h=190.0),
+    ]
+    resultado = list(asignar_track_ids(iter(eventos), Resumen()))
+    del_frame_1 = [e.track_id for e in resultado if e.frame == 1]
+    assert len(del_frame_1) == len(set(del_frame_1))

@@ -1,54 +1,36 @@
-"""Importador: de los .jsonl/.json del pipeline a PostgreSQL. Responsable: Persona 7.
+"""Importador: de los .jsonl/.json del pipeline a PostgreSQL. Persona 7.
 
-QUE HACE
---------
-Lee, para UN video ya procesado:
+Lee, para UN video ya procesado, `<video_id>.interact.jsonl` (eventos),
+`<video_id>.metrics.json` (agregados por zona) y `data/zones/<video_id>.json`
+(calibracion), y los inserta en las tablas de `backend/database/schema.sql`.
 
-    data/output/<video_id>.interact.jsonl   -- eventos completos (Personas 2-5)
-    data/output/<video_id>.metrics.json     -- agregados por zona (Persona 6)
-    data/zones/<video_id>.json              -- calibracion de camara (Persona 4)
+Reutiliza `gondola.contract` en vez de reescribir la validacion: `Event` ya
+comprueba la forma exacta de cada linea con `extra="forbid"`. Un archivo mal
+formado se detecta AQUI, con el numero de linea, y no como un INSERT a medias.
 
-y los inserta en las tablas de `backend/database/schema.sql`.
+IDEMPOTENCIA: POR QUE BORRAR Y REINSERTAR, Y NO ON CONFLICT
+------------------------------------------------------------
+Lo obvio seria apoyarse en el `UNIQUE (video_id, frame_number, track_id,
+bbox_x, bbox_y)` de `schema.sql`. No sirve: `track_id` puede ser NULL, y en
+SQL dos NULL nunca son iguales para un UNIQUE. Dos filas identicas con
+`track_id = NULL` no chocan y `ON CONFLICT` no las ve -duplicados silenciosos
+justo donde mas importan, la gente que el tracker aun no engancho-.
 
-POR QUE SE REUTILIZA gondola.contract EN VEZ DE REESCRIBIRLO
---------------------------------------------------------------
-`Event` ya valida la forma exacta de cada linea del .jsonl (con
-`extra="forbid"`, los mismos rangos que la base de datos). Si un archivo
-viene mal formado, la validacion lo detecta aqui, en la importacion, con el
-numero de linea exacto, y no como un INSERT fallido a medias.
+Asi que reimportar BORRA los `events`/`metrics` de ese video y reinserta el
+archivo entero, todo en una transaccion. Correrlo dos veces deja la base
+igual las dos veces, sin importar cuantos `track_id` sean NULL. `videos` y
+`zones` no se borran: se actualizan con `ON CONFLICT DO UPDATE` para
+conservar su UUID.
 
-IDEMPOTENCIA: COMO SE RESOLVIO Y POR QUE
--------------------------------------------
-La forma obvia es un `UNIQUE` + `ON CONFLICT DO NOTHING` en `events`, y de
-hecho `schema.sql` tiene uno: `UNIQUE (video_id, frame_number, track_id,
-bbox_x, bbox_y)`. El problema es que `track_id` puede ser NULL (una
-deteccion que el tracker todavia no engancho a nadie), y en SQL dos NULL
-NUNCA se consideran iguales para un UNIQUE: dos filas identicas salvo por
-tener ambas `track_id = NULL` no chocan, y `ON CONFLICT` no las ve. Confiar
-en ese UNIQUE dejaria pasar duplicados silenciosos justo en el caso donde
-mas importan (gente que el tracker todavia no identifico).
-
-Por eso este importador resuelve la idempotencia de otra forma, mas simple
-de razonar: reimportar un video primero BORRA sus `events`/`metrics`
-existentes (por `video_id`, dentro de una transaccion) y despues inserta el
-archivo completo desde cero. Correr el importador dos veces seguidas sobre
-el mismo archivo dejan la base exactamente igual las dos veces, sin
-importar cuantos `track_id` sean NULL. `videos` y `zones` no se borran: se
-actualizan con `ON CONFLICT ... DO UPDATE` para conservar su UUID (ver
-`db.upsert_video`/`db.upsert_zone`), que es lo que mantiene enlazadas las
-filas que SI sobreviven a la reimportacion (ninguna, en este esquema, pero
-mantiene el diseno igual de simple que en el resto del proyecto).
-
-POR QUE EL zone_id DE UN ESTANTE NO ES EL QUE TRAE EL CONTRATO
--------------------------------------------------------------------
-El contrato (`Event.zone`) trae `zone_id` de la GONDOLA (ej. "gondola_A") y
-`segment` del ESTANTE (ej. "estante_2"), y `segment` solo es unico DENTRO de
-su gondola (ver `gondola/zones_config.py`). Pero `zones.zone_id` en la base
-de datos es una columna UNIQUE para TODAS las filas, gondolas y estantes por
-igual. Este importador construye el identificador de un estante como
-`"<zone_id de la gondola>:<segment>"` (ej. "gondola_A:estante_2"): es
-deterministico, siempre unico, y se reconstruye igual cada vez que se
-reimporta, asi que no rompe la idempotencia de `zones`.
+EL zone_id DE UN ESTANTE NO ES EL DEL CONTRATO
+------------------------------------------------
+El contrato trae `zone_id` de la GONDOLA y `segment` del ESTANTE, y
+`segment` solo es unico dentro de su gondola. Pero `zones.zone_id` es UNIQUE
+para TODAS las filas. Por eso un estante se guarda como
+`"<zone_id>:<segment>"`: deterministico, unico, y se reconstruye igual en
+cada reimportacion. La misma convencion vive en
+`gondola/stages/metrics.py`; si se separan, el JOIN deja de encontrar los
+estantes.
 """
 
 from __future__ import annotations

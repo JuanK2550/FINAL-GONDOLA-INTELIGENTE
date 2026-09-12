@@ -579,7 +579,22 @@ def guardar_zonas(job_id: str, calibracion: Calibracion) -> dict[str, Any]:
         "frame_height": alto,
         "gondolas": [
             {
-                "zone_id": "gondola_A",
+                # El zone_id lleva el video_id adelante PORQUE `zones.zone_id`
+                # es UNIQUE EN TODA LA TABLA (ver backend/database/schema.sql):
+                # una zona es un sitio fisico, y dos videos de la MISMA gondola
+                # comparten su fila a proposito -asi se puede comparar la misma
+                # estanteria entre grabaciones-.
+                #
+                # Eso vale para videos de la misma tienda, no para una subida
+                # cualquiera. Con "gondola_A" fijo, CADA video subido reclamaba
+                # esa unica fila y le pisaba el nombre y la categoria a todos
+                # los demas: bug real, encontrado mirando la API -los seis
+                # clips del MERL pasaron a mostrar "Gondola subida" y
+                # "Estante 1/2/3" en vez de "Cereales" y "Snacks y pasabocas",
+                # porque una subida posterior gano el UPSERT-. Un video que
+                # alguien sube desde el dashboard es de una tienda que nadie
+                # mas conoce: su zona es suya.
+                "zone_id": f"{trabajo.video_id}_gondola_A",
                 "name": calibracion.gondola_name,
                 "product_category": None,
                 "shelves": [

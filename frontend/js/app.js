@@ -115,7 +115,7 @@ function render() {
     <div class="no-imprimir">${renderConnectionBanner()}</div>
     ${mainContent}
     ${renderConfigModal()}
-    ${renderSubidaModal()}
+    <div id="subida-modal-host">${renderSubidaModal()}</div>
     ${renderInfoModal()}
   `;
 
@@ -158,33 +158,18 @@ function render() {
   }));
 }
 
-// El mapa de calor lo pinta heatmap.js sobre un <canvas>, y pintarHeatmap()
-// se planta si el contenedor mide 0 de ancho (guarda necesaria: sin tamano
-// no hay escala a la que reescalar las coordenadas). Con el panel repartido
-// en secciones, la del mapa esta oculta casi siempre -> el lienzo se quedaba
-// VACIO, y por eso el mapa no salia en el PDF.
-//
-// Aqui se le devuelve el tamano el instante justo: se descubre la seccion,
-// se pinta y se vuelve a ocultar, todo seguido dentro del mismo cuadro de
-// animacion. El navegador no llega a pintar el estado intermedio, asi que
-// no hay parpadeo, y el lienzo queda listo para cuando alguien imprima.
-//
-// No se usa el evento 'beforeprint' -que seria lo natural- porque no todos
-// los caminos de impresion lo disparan (Chrome en modo headless con
-// --print-to-pdf no lo hace), y el reporte tiene que salir completo siempre.
 // Exportar el reporte a PDF.
 //
-// No basta con `window.print()`. El panel esta repartido en secciones y las
-// inactivas van con `display:none`; el mapa de calor, que es un <canvas>
-// pintado por heatmap.js, no llegaba al PDF -comprobado: con la seccion del
-// mapa activa el PDF trae el lienzo, y con otra activa no-. Confiar en que
-// una regla @media print lo destape no alcanza: en la impresion la seccion
-// aparece, pero el lienzo no viaja con ella.
+// No basta con `window.print()`: las secciones inactivas van con
+// `display:none` y el <canvas> del mapa no viaja al PDF con ellas -una regla
+// @media print destapa la seccion, pero no el lienzo-. Asi que se destapan
+// TODAS de verdad en pantalla, se repinta cada mapa ya con su tamaño real, y
+// recien entonces se imprime. `window.print()` bloquea hasta que se cierra
+// el dialogo, asi que al volver se deshace el destape.
 //
-// Aqui se destapan TODAS las secciones de verdad, en pantalla, se repinta
-// cada mapa ya con su tamano real, y recien entonces se imprime.
-// `window.print()` bloquea hasta que se cierra el dialogo, asi que al
-// volver se deshace el destape y se vuelve a pintar como estaba.
+// Tampoco se usa el evento 'beforeprint', que seria lo natural: no todos los
+// caminos de impresion lo disparan (Chrome headless con --print-to-pdf no lo
+// hace) y el reporte tiene que salir completo siempre.
 function exportarReportePDF() {
   document.body.classList.add('destapar-secciones');
   void document.body.offsetHeight;   // fuerza el recalculo antes de medir
@@ -202,6 +187,12 @@ function exportarReportePDF() {
   }
 }
 
+// pintarHeatmap() se planta si el contenedor mide 0 de ancho -sin tamaño no
+// hay escala a la que reescalar las coordenadas-, y con el panel repartido en
+// secciones la del mapa esta oculta casi siempre. Aqui se le devuelve el
+// tamaño el instante justo: se descubre la seccion, se pinta y se vuelve a
+// ocultar dentro del mismo cuadro de animacion, asi que el navegador no llega
+// a pintar el estado intermedio y no hay parpadeo.
 function pintarMapaAunqueOculto(containerId, positions, zonesGeometry) {
   const cont = document.getElementById(containerId);
   if (!cont) return;
@@ -290,6 +281,16 @@ document.addEventListener('click', async (e) => {
   else if (action === 'subida-reiniciar') abrirSubida();
   else if (action === 'subida-enviar') subirVideo();
   else if (action === 'subida-zonas') enviarZonas();
+  else if (action === 'sugerir-zona') {
+    const puntos = (state.subida.job && state.subida.job.detalles && state.subida.job.detalles.puntos_pies) || [];
+    const cupo = 4 - state.subida.rects.length;
+    const propuestas = zonasSugeridas(puntos, cupo);
+    if (propuestas.length) {
+      actualizarSubida({ rects: [...state.subida.rects, ...propuestas.map((r, i) => ({
+        ...r, name: `Estante ${state.subida.rects.length + i + 1}`, categoria: '',
+      }))] });
+    }
+  }
   else if (action === 'borrar-rect') {
     const i = Number(el.dataset.indice);
     actualizarSubida({ rects: state.subida.rects.filter((_, n) => n !== i) });
