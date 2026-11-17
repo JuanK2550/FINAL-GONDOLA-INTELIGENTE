@@ -22,8 +22,8 @@ El resto del proyecto es Python de punta a punta, y este archivo es la
 excepción — es HTML + CSS + JavaScript vanilla. Se dice en voz alta en vez
 de esconderlo:
 
-- Se diseñó primero en React (con ayuda de una IA, a partir de un prompt que
-  describe el contrato exacto de la API), y después se portó a mano a
+- Se diseñó primero en React, a partir del contrato exacto de la API, y
+  después se portó a mano a
   HTML/CSS/JS plano — sin React, sin Node, sin `npm install`, sin paso de
   build — para no romper la regla del equipo de "un solo entorno que
   instalar". No hay ningún `package.json` aquí: `index.html` se abre y ya.
@@ -200,8 +200,7 @@ Tailwind vendorizado (ver "Qué instalar", más abajo).
   en `js/app.js`), entrada escalonada al cargar (`.stagger-in`, solo la
   primera vez, no en cada render), tarjetas que se levantan al hover
   (`.card-lift`). Respeta `prefers-reduced-motion`.
-- **Logo:** imagen generada por IA (una góndola en línea azul/morada),
-  procesada a mano para quitarle el fondo (llegó como JPG con un
+- **Logo:** una góndola en línea azul/morada, procesada a mano para quitarle el fondo (llegó como JPG con un
   cuadriculado "quemado" en los píxeles, sin transparencia real — se limpió
   con una técnica de clave de color, quedándose solo con lo azul/morado
   saturado). Vive como archivo aparte, `assets/logo.png` (referenciado por

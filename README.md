@@ -80,7 +80,7 @@ limpiar tablas. El razonamiento completo está en
 | Base de datos | PostgreSQL 17 (en Docker para desarrollo) |
 | Video renderizado | H.264 vía OpenCV + openh264, reproducible en cualquier navegador |
 | Dashboard | HTML/CSS/JS vanilla + Tailwind vendorizado — **la única excepción al Python** |
-| Tests | pytest (460 tests) |
+| Tests | pytest (416 tests) |
 
 **Python para todo el sistema**, de la detección al backend. No se usa Java,
 Spring Boot, JPA, Maven, Gradle ni IntelliJ, y no hay una línea de eso en el
@@ -149,6 +149,41 @@ python -m gondola doctor
 `doctor` es lo primero que hay que correr cuando algo no funciona: dice qué
 está instalado, qué archivos faltan, si el códec H.264 **codifica de verdad**
 (no solo si la librería existe) y en qué punto va la cadena.
+
+---
+
+## Verlo funcionando
+
+Con Docker Desktop abierto, tres pasos:
+
+```bash
+# 1. Base de datos
+cd backend
+docker compose up -d
+
+# 2. API (deja esta terminal abierta)
+python -m uvicorn api:app --host 127.0.0.1 --port 8000
+
+# 3. Dashboard: doble clic sobre frontend/index.html
+```
+
+El dashboard se conecta solo a `http://127.0.0.1:8000`. Desde ahí se puede
+elegir un video, ver sus métricas, el mapa de calor, el video anonimizado,
+comparar dos videos o **subir uno nuevo**: la API corre la cadena completa y lo
+importa sola.
+
+Si la base de datos está vacía (un clon nuevo arranca así), procesa un video e
+impórtalo:
+
+```bash
+cd ai-service
+python -m gondola run                          # usa VIDEO_PATH y VIDEO_ID del .env
+cd ../backend
+python importer.py --video-id video_001
+```
+
+Si el puerto 5433 ya lo usa otro PostgreSQL, cámbialo en
+`backend/docker-compose.yml` y en `DATABASE_URL` de `backend/.env`.
 
 ---
 
@@ -312,11 +347,12 @@ PostgreSQL y se ve en el dashboard.
 | Las cinco etapas (detect, track, zones, interact, metrics) | hecho |
 | Verificador de contrato y privacidad | hecho |
 | Base de datos, importador y API REST | hecho |
-| Dashboard, con recomendaciones y nivel de confianza | hecho |
+| Dashboard, con retroalimentación automática por video | hecho |
+| Motor de recomendaciones con nivel de confianza | pendiente |
 | Subir un video desde el navegador y procesarlo | hecho |
 | Viabilidad *edge* (CPU, sin GPU, sin nube) | medido — [edge-viability.md](docs/edge-viability.md) |
 | Evaluación de interacción contra groundtruth | medido — [interact-evaluacion-merl.md](docs/interact-evaluacion-merl.md) |
-| Cobertura de pruebas | 460 tests |
+| Cobertura de pruebas | 416 tests |
 
 ### Alcance: qué mide y qué no
 
@@ -359,6 +395,39 @@ pytest
 `requirements-dev.txt` es ligero a propósito: los tests corren sin descargar
 los 3 GB de PyTorch. Lo pesado vive en `requirements.txt` y solo lo necesita
 quien ejecuta el pipeline completo.
+
+---
+
+## Equipo
+
+Equipo CodeBolts:
+
+- Juan Camilo Calderón Delgado
+- Diego Armando Cubillos Clavijo
+- Oscar Julián Torres Barreto
+- Juan Esteban Herrera Rojas
+- Maryori Brigith Barrera Ascanio
+- Juan Diego Velasco Quintero
+- Cristian Rodrigo Amaya Torres
+- Juan Sebastián Bonilla León
+
+---
+
+## Materia de Big Data
+
+Presentado para la materia de Big Data por:
+
+- Juan Camilo Calderón Delgado
+- Oscar Julián Torres Barreto
+- Diego Armando Cubillos Clavijo
+
+Por volumen no es Big Data: no hay clúster, ni Hadoop, ni Spark, y los datos
+son megabytes. Por arquitectura sí aplica la ingeniería de datos de la
+materia: es un pipeline ETL (video → cinco etapas → PostgreSQL), con capas de
+datos crudos, enriquecidos y agregados, un esquema validado al escribir,
+procesamiento en streaming sobre JSONL, importación idempotente y conteos con
+`COUNT(DISTINCT track_id)`. Con más tiendas cambiaría el motor de ejecución,
+no el diseño.
 
 ---
 

@@ -96,7 +96,7 @@ ayudar entre sí.
 
 **`frontend/` rompe esta regla, a propósito y por escrito.** Es HTML con
 CSS y JavaScript vanilla: sin Node, sin `npm install`, sin build. Se
-diseñó primero en React (con ayuda de una IA) y se portó a mano a HTML/JS
+diseñó primero en React y se portó a mano a HTML/JS
 plano para no obligar al equipo a instalar un segundo entorno — la parte
 que sí se sostiene de "un solo entorno que instalar" es que sigue sin
 necesitar Node en ninguna máquina, aunque el código ya no vive en un solo
